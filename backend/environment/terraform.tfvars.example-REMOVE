@@ -1,0 +1,81 @@
+# AWS Health Dashboard Configuration Example
+# Copy this file to terraform.tfvars and customize
+
+# Basic Configuration
+aws_region    = "us-east-1"
+aws_profile   = "default"  # Change to your AWS profile name
+stage_name    = "dev"
+environment   = "development"
+project_name  = "health-dashboard"
+
+# React App Configuration
+react_app_domain = "localhost:3000"  # Change to your domain for production
+
+# Naming Convention Examples
+# Choose one of the patterns below or create your own
+
+# Example 1: Simple prefix/suffix
+naming_convention = {
+  prefix    = "mycompany"
+  suffix    = "dev"
+  separator = "-"
+  use_random_suffix = false
+}
+# Results in: mycompany-health-dashboard-dev-*
+
+# Example 2: Environment-based naming
+# naming_convention = {
+#   prefix    = ""
+#   suffix    = "development"
+#   separator = "-"
+#   use_random_suffix = false
+# }
+# Results in: health-dashboard-development-*
+
+# Example 3: Random suffix for uniqueness
+# naming_convention = {
+#   prefix    = "acme"
+#   suffix    = ""
+#   separator = "-"
+#   use_random_suffix = true
+# }
+# Results in: acme-health-dashboard-a1b2c3d4-*
+
+# Example 4: Minimal naming (default)
+# naming_convention = {
+#   prefix    = ""
+#   suffix    = ""
+#   separator = "-"
+#   use_random_suffix = false
+# }
+# Results in: health-dashboard-*
+
+# Health Event Monitoring Regions
+# Configure which AWS regions to monitor for health events
+# us-east-1 is always included as the processing region
+
+# Example 1: Common regions
+health_monitoring_regions = ["us-east-1", "us-west-2", "eu-west-1"]
+
+# Example 2: US regions only
+# health_monitoring_regions = ["us-east-1", "us-east-2", "us-west-1", "us-west-2"]
+
+# Example 3: Global coverage
+# health_monitoring_regions = [
+#   "us-east-1", "us-east-2", "us-west-1", "us-west-2",
+#   "eu-west-1", "eu-west-2", "eu-central-1",
+#   "ap-southeast-1", "ap-northeast-1"
+# ]
+
+# Example 4: Single region (us-east-1 only)
+# health_monitoring_regions = ["us-east-1"]
+
+# Note: The deploy script will prompt you to select regions interactively
+# and automatically populate this variable
+
+# Frontend Build Configuration
+# Set to true to automatically build and deploy the React frontend
+build_and_upload = false
+
+# Frontend source path (relative to Terraform working directory)
+frontend_source_path = "../../../frontend/app"

@@ -1,0 +1,44 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 18
+  pre_build:
+    commands:
+      - echo $S3_HOSTING_BUCKET
+      - echo Installing dependencies...
+      - npm install
+  build:
+    commands:
+      - echo Generating aws-exports.json with environment variables...
+      - |
+        cat > public/aws-exports.json << EOF
+        {
+          "region": "us-west-2",
+          "Auth": {
+            "Cognito": {
+              "userPoolClientId": "$USER_POOL_CLIENT_ID",
+              "userPoolId": "$USER_POOL_ID",
+              "identityPoolId": "$IDENTITY_POOL_ID"
+            }
+          },
+          "API": {
+            "REST": {
+              "RestApi": { "endpoint": "https://d1eo1q10dj54ib.cloudfront.net/api/v1" }
+            }
+          }
+        }
+        EOF
+      - echo Building the React application...
+      - npm run build
+  post_build: 
+    commands:
+      - echo Deploying to S3...
+      - aws s3 sync dist/ s3://$S3_HOSTING_BUCKET --delete
+      - echo Creating CloudFront invalidation...
+      - aws cloudfront create-invalidation --distribution-id $CLOUDFRONT_DISTRIBUTION_ID --paths "/*"
+
+artifacts:
+  files:
+    - '**/*'

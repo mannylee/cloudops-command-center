@@ -1,0 +1,957 @@
+openapi: 3.0.3
+info:
+  title: AWS Health Dashboard API
+  description: |
+    API for AWS Health Dashboard - Organization Summary
+    
+    This API provides endpoints for managing AWS Health events and filters
+    across multiple AWS accounts in an organization.
+  version: 1.0.0
+  contact:
+    name: AWS Health Dashboard Team
+    email: health-dashboard@company.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: https://api.health-dashboard.company.com/v1
+    description: Production server
+  - url: https://staging-api.health-dashboard.company.com/v1
+    description: Staging server
+
+x-amazon-apigateway-request-validators:
+  all:
+    validateRequestBody: true
+    validateRequestParameters: true
+  params-only:
+    validateRequestBody: false
+    validateRequestParameters: true
+
+security:
+  - ${name_prefix}UserPool: []
+
+paths:
+  /dashboard/summary:
+    get:
+      summary: Get dashboard summary metrics
+      description: Returns summary counts for notifications, active issues, scheduled events, and billing changes. Optionally filter by filterId.
+      tags:
+        - Dashboard
+      security:
+        - ${name_prefix}UserPool: []
+      x-amazon-apigateway-request-validator: params-only
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri: ${dashboard_function_arn}
+      parameters:
+        - name: filterId
+          in: query
+          description: Optional filter ID to apply for account filtering
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Dashboard summary data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardSummary'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    options:
+      summary: CORS preflight
+      security: []
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri: ${dashboard_function_arn}
+      responses:
+        '200':
+          description: CORS preflight response
+
+  /events/notifications:
+    get:
+      summary: Get account notifications
+      description: Retrieve all account notifications with optional filtering
+      tags:
+        - Events
+      x-amazon-apigateway-request-validator: all
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri: ${events_function_arn}
+      parameters:
+        - name: filter
+          in: query
+          description: Filter ID to apply
+          schema:
+            type: string
+        - name: priority
+          in: query
+          description: Filter by priority level
+          schema:
+            type: string
+            enum: [critical, high, medium, low]
+        - name: limit
+          in: query
+          description: Maximum number of results per page
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: offset
+          in: query
+          description: Number of results to skip for pagination
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: List of notifications
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/HealthEvent'
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    options:
+      summary: CORS preflight
+      security: []
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri: ${events_function_arn}
+      responses:
+        '200':
+          description: CORS preflight response
+
+  /events/notifications/{filterId}:
+    get:
+      summary: Get account notifications by filter
+      description: Retrieve account notifications filtered by specific filter ID
+      tags:
+        - Events
+      x-amazon-apigateway-request-validator: all
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri: ${events_function_arn}
+      parameters:
+        - name: filterId
+          in: path
+          required: true
+          description: Filter ID
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Maximum number of results per page
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: offset
+          in: query
+          description: Number of results to skip for pagination
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: List of notifications
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/HealthEvent'
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+    options:
+      summary: CORS preflight
+      security: []
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri: ${events_function_arn}
+      responses:
+        '200':
+          description: CORS preflight response
+
+  /events/issues:
+    get:
+      summary: Get active health issues
+      description: Retrieve currently active health issues affecting services
+      tags:
+        - Events
+      x-amazon-apigateway-request-validator: all
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri: ${events_function_arn}
+      parameters:
+        - name: filter
+          in: query
+          description: Filter ID to apply
+          schema:
+            type: string
+        - name: service
+          in: query
+          description: Filter by AWS service
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of active issues
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/HealthEvent'
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+    options:
+      summary: CORS preflight
+      security: []
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri: ${events_function_arn}
+      responses:
+        '200':
+          description: CORS preflight response
+
+  /events/issues/{filterId}:
+    get:
+      summary: Get active health issues by filter
+      description: Retrieve active health issues filtered by specific filter ID
+      tags:
+        - Events
+      x-amazon-apigateway-request-validator: all
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri: ${events_function_arn}
+      parameters:
+        - name: filterId
+          in: path
+          required: true
+          description: Filter ID
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Maximum number of results per page
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: offset
+          in: query
+          description: Number of results to skip for pagination
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: List of active issues
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/HealthEvent'
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+    options:
+      summary: CORS preflight
+      security: []
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri: ${events_function_arn}
+      responses:
+        '200':
+          description: CORS preflight response
+
+  /events/scheduled:
+    get:
+      summary: Get scheduled maintenance events
+      description: Retrieve upcoming scheduled maintenance events
+      tags:
+        - Events
+      x-amazon-apigateway-request-validator: all
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri: ${events_function_arn}
+      parameters:
+        - name: filter
+          in: query
+          description: Filter ID to apply
+          schema:
+            type: string
+        - name: start_date
+          in: query
+          description: Filter events starting from this date
+          schema:
+            type: string
+            format: date
+        - name: end_date
+          in: query
+          description: Filter events ending before this date
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: List of scheduled events
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ScheduledEvent'
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+    options:
+      summary: CORS preflight
+      security: []
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri: ${events_function_arn}
+      responses:
+        '200':
+          description: CORS preflight response
+
+  /events/scheduled/{filterId}:
+    get:
+      summary: Get scheduled maintenance events by filter
+      description: Retrieve scheduled maintenance events filtered by specific filter ID
+      tags:
+        - Events
+      x-amazon-apigateway-request-validator: all
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri: ${events_function_arn}
+      parameters:
+        - name: filterId
+          in: path
+          required: true
+          description: Filter ID
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Maximum number of results per page
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: offset
+          in: query
+          description: Number of results to skip for pagination
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: List of scheduled events
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ScheduledEvent'
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+    options:
+      summary: CORS preflight
+      security: []
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri: ${events_function_arn}
+      responses:
+        '200':
+          description: CORS preflight response
+
+  /events/billing:
+    get:
+      summary: Get billing-related events
+      description: Retrieve events that may affect billing
+      tags:
+        - Events
+      x-amazon-apigateway-request-validator: all
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri: ${events_function_arn}
+      parameters:
+        - name: filter
+          in: query
+          description: Filter ID to apply
+          schema:
+            type: string
+        - name: account_id
+          in: query
+          description: Filter by specific account ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of billing events
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/BillingEvent'
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+    options:
+      summary: CORS preflight
+      security: []
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri: ${events_function_arn}
+      responses:
+        '200':
+          description: CORS preflight response
+
+  /events/billing/{filterId}:
+    get:
+      summary: Get billing-related events by filter
+      description: Retrieve billing events filtered by specific filter ID
+      tags:
+        - Events
+      x-amazon-apigateway-request-validator: all
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri: ${events_function_arn}
+      parameters:
+        - name: filterId
+          in: path
+          required: true
+          description: Filter ID
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Maximum number of results per page
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: offset
+          in: query
+          description: Number of results to skip for pagination
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: List of billing events
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/BillingEvent'
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+    options:
+      summary: CORS preflight
+      security: []
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri: ${events_function_arn}
+      responses:
+        '200':
+          description: CORS preflight response
+
+  /filters:
+    get:
+      summary: Get all filters
+      description: Retrieve all configured filters for the organization
+      tags:
+        - Filters
+      security:
+        - ${name_prefix}UserPool: []
+      x-amazon-apigateway-request-validator: all
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri: ${filters_function_arn}
+      responses:
+        '200':
+          description: List of filters
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Filter'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+    post:
+      summary: Create a new filter
+      description: Create a new filter configuration
+      tags:
+        - Filters
+      security:
+        - ${name_prefix}UserPool: []
+      x-amazon-apigateway-request-validator: all
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri: ${filters_function_arn}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateFilterRequest'
+      responses:
+        '201':
+          description: Filter created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Filter'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    options:
+      summary: CORS preflight
+      security: []
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri: ${filters_function_arn}
+      responses:
+        '200':
+          description: CORS preflight response
+
+  /filters/{filterId}:
+    get:
+      summary: Get filter by ID
+      description: Retrieve a specific filter configuration
+      tags:
+        - Filters
+      security:
+        - ${name_prefix}UserPool: []
+      x-amazon-apigateway-request-validator: all
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri: ${filters_function_arn}
+      parameters:
+        - name: filterId
+          in: path
+          required: true
+          description: Filter ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Filter details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Filter'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    put:
+      summary: Update filter
+      description: Update an existing filter configuration
+      tags:
+        - Filters
+      security:
+        - ${name_prefix}UserPool: []
+      x-amazon-apigateway-request-validator: all
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri: ${filters_function_arn}
+      parameters:
+        - name: filterId
+          in: path
+          required: true
+          description: Filter ID
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateFilterRequest'
+      responses:
+        '200':
+          description: Filter updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Filter'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      summary: Delete filter
+      description: Delete a filter configuration
+      tags:
+        - Filters
+      security:
+        - ${name_prefix}UserPool: []
+      x-amazon-apigateway-request-validator: all
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri: ${filters_function_arn}
+      parameters:
+        - name: filterId
+          in: path
+          required: true
+          description: Filter ID
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Filter deleted successfully
+        '404':
+          $ref: '#/components/responses/NotFound'
+    options:
+      summary: CORS preflight
+      security: []
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri: ${filters_function_arn}
+      responses:
+        '200':
+          description: CORS preflight response
+
+components:
+  securitySchemes:
+    ${name_prefix}UserPool:
+      type: apiKey
+      name: Authorization
+      in: header
+      x-amazon-apigateway-authtype: cognito_user_pools
+      x-amazon-apigateway-authorizer:
+        type: cognito_user_pools
+        providerARNs:
+          - ${cognito_user_pool_arn}
+        identitySource: method.request.header.Authorization
+
+  schemas:
+    DashboardSummary:
+      type: object
+      properties:
+        notifications:
+          type: integer
+          description: Number of notifications requiring attention
+          example: 6
+        active_issues:
+          type: integer
+          description: Number of active health issues
+          example: 0
+        scheduled_events:
+          type: integer
+          description: Number of scheduled maintenance events
+          example: 5
+        billing_changes:
+          type: integer
+          description: Number of accounts with billing-related changes
+          example: 3
+
+    HealthEvent:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique event identifier
+        event_type:
+          type: string
+          description: Type of health event
+          enum: [service-issue, account-notification, scheduled-maintenance]
+        title:
+          type: string
+          description: Event title
+        description:
+          type: string
+          description: Detailed event description
+        service:
+          type: string
+          description: Affected AWS service
+        region:
+          type: string
+          description: Affected AWS region
+        account_ids:
+          type: array
+          items:
+            type: string
+          description: List of affected account IDs
+        priority:
+          type: string
+          enum: [critical, high, medium, low]
+        status:
+          type: string
+          enum: [open, resolved, investigating]
+        start_time:
+          type: string
+          format: date-time
+        end_time:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ScheduledEvent:
+      allOf:
+        - $ref: '#/components/schemas/HealthEvent'
+        - type: object
+          properties:
+            scheduled_start:
+              type: string
+              format: date-time
+              description: Scheduled start time
+            scheduled_end:
+              type: string
+              format: date-time
+              description: Scheduled end time
+            maintenance_type:
+              type: string
+              description: Type of maintenance
+              enum: [hardware, software, network, security]
+
+    BillingEvent:
+      allOf:
+        - $ref: '#/components/schemas/HealthEvent'
+        - type: object
+          properties:
+            billing_impact:
+              type: string
+              description: Description of billing impact
+            estimated_cost_change:
+              type: number
+              format: float
+              description: Estimated cost change in USD
+
+    Filter:
+      type: object
+      properties:
+        filterId:
+          type: string
+          description: Unique filter identifier
+        filterName:
+          type: string
+          description: Filter name
+        description:
+          type: string
+          description: Filter description
+        type:
+          type: string
+          enum: [account-based, service-based, priority-based, region-based]
+        accountIds:
+          type: array
+          items:
+            type: string
+          description: List of account IDs to include
+ 
+
+    CreateFilterRequest:
+      type: object
+      required:
+        - filterName
+        - accountIds
+      properties:
+        filterName:
+          type: string
+          description: Filter name
+          minLength: 1
+          maxLength: 100
+        description:
+          type: string
+          description: Filter description
+          maxLength: 500
+        accountIds:
+          type: array
+          items:
+            type: string
+          minItems: 1
+          description: List of account IDs to include
+
+
+    UpdateFilterRequest:
+      type: object
+      properties:
+        filterName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 500
+        accountIds:
+          type: array
+          items:
+            type: string
+          minItems: 1
+  
+
+    Pagination:
+      type: object
+      properties:
+        total:
+          type: integer
+          description: Total number of consolidated items available
+        limit:
+          type: integer
+          description: Number of items per page
+        offset:
+          type: integer
+          description: Number of items skipped
+        has_more:
+          type: boolean
+          description: Whether there are more items available
+        current_page:
+          type: integer
+          description: Current page number (1-based)
+        total_pages:
+          type: integer
+          description: Total number of pages available
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              description: Error code
+            message:
+              type: string
+              description: Human-readable error message
+            details:
+              type: object
+              description: Additional error details
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: "INVALID_REQUEST"
+              message: "The request parameters are invalid"
+
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: "UNAUTHORIZED"
+              message: "Authentication required"
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: "NOT_FOUND"
+              message: "The requested resource was not found"
+
+    InternalServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: "INTERNAL_ERROR"
+              message: "An internal server error occurred"
+
+tags:
+  - name: Dashboard
+    description: Dashboard summary and metrics
+  - name: Events
+    description: AWS Health events and notifications
+  - name: Filters
+    description: Filter management for organizing events
