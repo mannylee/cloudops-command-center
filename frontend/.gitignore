@@ -1,0 +1,26 @@
+# Terraform
+infra/.terraform/
+infra/.terraform.lock.hcl
+infra/terraform.tfstate
+infra/terraform.tfstate.backup
+infra/terraform.tfvars
+infra/*.tfplan
+
+# React App
+app/node_modules/
+app/dist/
+app/build/
+app/.env
+app/.env.local
+app/.env.development.local
+app/.env.test.local
+app/.env.production.local
+app/npm-debug.log*
+app/yarn-debug.log*
+app/yarn-error.log*
+
+# General
+.DS_Store
+*.log
+.vscode/
+.idea/

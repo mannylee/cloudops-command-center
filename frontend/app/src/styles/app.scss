@@ -1,0 +1,301 @@
+@use "@cloudscape-design/design-tokens/index.scss" as awsui;
+
+* {
+  box-sizing: border-box;
+}
+
+:root {
+  --app-color-scheme: light;
+  color-scheme: var(--app-color-scheme);
+}
+
+html,
+body,
+#root,
+div[data-amplify-authenticator],
+div[data-amplify-theme] {
+  height: 100%;
+}
+
+body {
+  background-color: #ffffff;
+  overflow-y: scroll;
+}
+
+body.awsui-dark-mode {
+  background-color: #0e1b2a;
+}
+
+// Cool loading animations
+@keyframes pulse {
+  0% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.7;
+    transform: scale(1.02);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200px 0;
+  }
+
+  100% {
+    background-position: calc(200px + 100%) 0;
+  }
+}
+
+@keyframes blink {
+
+  0%,
+  50% {
+    opacity: 1;
+  }
+
+  51%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(30px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes bounce {
+
+  0%,
+  20%,
+  53%,
+  80%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+
+  40%,
+  43% {
+    transform: translate3d(0, -8px, 0);
+  }
+
+  70% {
+    transform: translate3d(0, -4px, 0);
+  }
+
+  90% {
+    transform: translate3d(0, -2px, 0);
+  }
+}
+
+@keyframes glow {
+  0% {
+    box-shadow: 0 0 5px rgba(102, 126, 234, 0.5);
+  }
+
+  50% {
+    box-shadow: 0 0 20px rgba(102, 126, 234, 0.8);
+  }
+
+  100% {
+    box-shadow: 0 0 5px rgba(102, 126, 234, 0.5);
+  }
+}
+
+.loading-shimmer {
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
+  background-size: 200px 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+.dashboard-card {
+  animation: fadeInUp 0.6s ease-out;
+}
+
+.dashboard-card:nth-child(1) {
+  animation-delay: 0.1s;
+}
+
+.dashboard-card:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.dashboard-card:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+.dashboard-card:nth-child(4) {
+  animation-delay: 0.4s;
+}
+
+.ai-insight-item {
+  animation: slideInRight 0.5s ease-out;
+}
+
+.ai-insight-item:nth-child(1) {
+  animation-delay: 0.1s;
+}
+
+.ai-insight-item:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.ai-insight-item:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+.recommendation-card {
+  animation: fadeInUp 0.8s ease-out;
+}
+
+.recommendation-card:nth-child(1) {
+  animation-delay: 0.2s;
+}
+
+.recommendation-card:nth-child(2) {
+  animation-delay: 0.4s;
+}
+
+.recommendation-card:nth-child(3) {
+  animation-delay: 0.6s;
+}
+
+// Custom navigation text styling
+.large-nav-text {
+  font-size: 16px !important;
+  font-weight: 600 !important;
+  line-height: 1.4 !important;
+}
+
+// Navigation wrapper styling
+.navigation-wrapper {
+
+  // Target the first navigation item specifically
+  .awsui-side-navigation-item:first-child {
+    .awsui-side-navigation-item-link {
+      font-size: 26px !important;
+      font-weight: 600 !important;
+      line-height: 1.4 !important;
+    }
+  }
+}
+
+// Alternative approach - target the specific navigation item globally
+.awsui-side-navigation [data-testid="side-navigation-item-link"]:first-child {
+  font-size: 16px !important;
+  font-weight: 600 !important;
+  line-height: 1.4 !important;
+}
+
+// CloudScape severity badge enhancement: Make all severity badges bold
+span[class*="awsui_badge"][class*="severity"] {
+  font-weight: bold !important;
+}
+
+// Hide Container borders in sidebar content
+.sidebar-content {
+
+  // Target the awsui_root variant element ONLY within sidebar content
+  div[class*="awsui_root"] {
+    border: none !important;
+    box-shadow: none !important;
+    background: transparent !important;
+  }
+
+  // Target all Container components within the sidebar with maximum specificity
+  div[class*="awsui_container"] {
+    border: none !important;
+    box-shadow: none !important;
+    background: transparent !important;
+
+    // Remove any border radius that might show as lines
+    border-radius: 0 !important;
+
+    // Remove any outline or focus styles
+    outline: none !important;
+  }
+
+  // Target container content areas
+  div[class*="awsui_container-content"] {
+    padding: var(--space-scaled-m) 0 !important;
+    border: none !important;
+    background: transparent !important;
+  }
+
+  // Target container headers
+  div[class*="awsui_container-header"] {
+    border: none !important;
+    border-bottom: none !important;
+    background: transparent !important;
+    padding-bottom: var(--space-scaled-xs) !important;
+    box-shadow: none !important;
+  }
+
+  // Additional targeting for any nested containers
+  * {
+    &[class*="awsui_container"] {
+      border: none !important;
+      box-shadow: none !important;
+      background: transparent !important;
+    }
+  }
+
+  // Target any divider or separator elements
+  div[class*="awsui_divider"],
+  div[class*="awsui_separator"],
+  hr {
+    display: none !important;
+  }
+}
+
+// Hide Container borders in sidebar content
+.sidebar-content {
+
+  // Target all Container components within the sidebar
+  [class*="awsui_container"] {
+    border: none !important;
+    box-shadow: none !important;
+
+    // Also remove any background that might create visual separation
+    background: transparent !important;
+  }
+
+  // Ensure proper spacing is maintained
+  [class*="awsui_container-content"] {
+    padding: var(--space-scaled-m) 0 !important;
+  }
+
+  // Keep header styling but remove container styling
+  [class*="awsui_container-header"] {
+    border-bottom: none !important;
+    background: transparent !important;
+    padding-bottom: var(--space-scaled-xs) !important;
+  }
+}
