@@ -466,6 +466,27 @@ function Configure-FrontendBuildUpload {
     Write-Success "Frontend configuration saved"
 }
 
+# Function to list available Bedrock models (for troubleshooting)
+function Get-AvailableBedrockModels {
+    param(
+        [string]$DeploymentRegion
+    )
+    
+    Write-Status "Checking available Bedrock models in region: $DeploymentRegion"
+    
+    try {
+        aws bedrock list-foundation-models `
+            --region $DeploymentRegion `
+            --output table `
+            --query 'modelSummaries[?contains(modelId, `anthropic`)].{ModelId:modelId,ModelName:modelName,Status:modelLifecycle.status}' 2>$null
+        
+        Write-Host ""
+        Write-Status "To enable model access, visit: https://console.aws.amazon.com/bedrock/home?region=$DeploymentRegion#/modelaccess"
+    } catch {
+        Write-Warning "Could not list Bedrock models. This might be due to insufficient permissions."
+    }
+}
+
 # Function to validate Bedrock model access
 function Test-BedrockAccess {
     param(
@@ -496,6 +517,10 @@ function Test-BedrockAccess {
         Write-ErrorMsg "Region: $DeploymentRegion"
         Write-Host ""
         
+        # Show available models for troubleshooting
+        Get-AvailableBedrockModels -DeploymentRegion $DeploymentRegion
+        Write-Host ""
+        
         Write-Status "🔧 To fix this issue:"
         Write-Host "1. Go to AWS Console → Amazon Bedrock → Model access"
         Write-Host "2. Navigate to the '$DeploymentRegion' region"
@@ -516,6 +541,38 @@ function Test-BedrockAccess {
         
         Remove-Item $tempFile -ErrorAction SilentlyContinue
         return $false
+    }
+}
+
+# Function to check Bedrock access for existing configuration
+function Test-ExistingBedrockAccess {
+    $tfvarsFile = "environment\terraform.tfvars"
+    
+    if (Test-Path $tfvarsFile) {
+        $content = Get-Content $tfvarsFile -Raw
+        
+        # Extract deployment region and bedrock model from existing config
+        $existingRegion = ""
+        $existingModel = ""
+        
+        if ($content -match 'aws_region\s*=\s*"([^"]+)"') {
+            $existingRegion = $matches[1]
+        }
+        if ($content -match 'bedrock_model_id\s*=\s*"([^"]+)"') {
+            $existingModel = $matches[1]
+        }
+        
+        if ($existingRegion -and $existingModel) {
+            Write-Status "Found existing Bedrock configuration:"
+            Write-Status "  Region: $existingRegion"
+            Write-Status "  Model: $existingModel"
+            
+            if (-not (Test-BedrockAccess -DeploymentRegion $existingRegion -BedrockModelId $existingModel)) {
+                Write-ErrorMsg "Existing Bedrock model configuration is not accessible"
+                Write-Status "Please enable model access or reconfigure with a different model"
+                exit 1
+            }
+        }
     }
 }
 
@@ -768,6 +825,103 @@ function Configure-Deployment {
         Get-Content $script:TfvarsFile
         Write-Host "=================================="
         
+        # Extract and display health monitoring regions in a user-friendly way
+        $content = Get-Content $script:TfvarsFile -Raw
+        if ($content -match 'health_monitoring_regions\s*=\s*\[(.*?)\]') {
+            $regionsMatch = $matches[1]
+            $regions = $regionsMatch -split ',' | ForEach-Object { $_.Trim().Trim('"') } | Where-Object { $_ }
+            if ($regions) {
+                Write-Status "Health Monitoring Regions:"
+                foreach ($region in $regions) {
+                    Write-Host "  • $region"
+                }
+                Write-Host "=================================="
+            }
+        }
+        
+        # Extract and display environment information
+        if ($content -match 'environment\s*=\s*"([^"]+)"') {
+            $environmentValue = $matches[1]
+            $stageValue = ""
+            if ($content -match 'stage_name\s*=\s*"([^"]+)"') {
+                $stageValue = $matches[1]
+            }
+            Write-Status "Environment Configuration:"
+            Write-Host "  • Environment: $environmentValue"
+            Write-Host "  • Stage: $stageValue"
+            Write-Host "=================================="
+        }
+        
+        # Extract and display frontend build configuration
+        if ($content -match 'build_and_upload\s*=\s*(true|false)') {
+            $buildUploadValue = $matches[1]
+            Write-Status "Frontend Build & Upload:"
+            if ($buildUploadValue -eq "true") {
+                Write-Host "  • ✅ Enabled - Frontend will be built and uploaded automatically"
+            } else {
+                Write-Host "  • ❌ Disabled - Frontend build/upload will be skipped"
+            }
+            Write-Host "=================================="
+        }
+        
+        # Extract and display email notification configuration
+        if ($content -match 'enable_email_notifications\s*=\s*(true|false)') {
+            $emailEnabled = $matches[1]
+            Write-Status "Email Notifications:"
+            if ($emailEnabled -eq "true") {
+                $senderEmailValue = ""
+                $masterEmailValue = ""
+                $scheduleValue = ""
+                if ($content -match 'sender_email\s*=\s*"([^"]+)"') {
+                    $senderEmailValue = $matches[1]
+                }
+                if ($content -match 'master_recipient_email\s*=\s*"([^"]+)"') {
+                    $masterEmailValue = $matches[1]
+                }
+                if ($content -match 'email_schedule_expression\s*=\s*"([^"]+)"') {
+                    $scheduleValue = $matches[1]
+                }
+                Write-Host "  • ✅ Enabled - Weekly email summaries will be sent"
+                Write-Host "  • Sender: $senderEmailValue"
+                Write-Host "  • Recipient: $masterEmailValue"
+                Write-Host "  • Schedule: $scheduleValue"
+            } else {
+                Write-Host "  • ❌ Disabled - No email notifications will be sent"
+            }
+            Write-Host "=================================="
+        }
+        
+        # Extract and display Bedrock model configuration
+        if ($content -match 'bedrock_model_id\s*=\s*"([^"]+)"') {
+            $bedrockModelValue = $matches[1]
+            $awsRegionValue = ""
+            if ($content -match 'aws_region\s*=\s*"([^"]+)"') {
+                $awsRegionValue = $matches[1]
+            }
+            Write-Status "Bedrock Model Configuration:"
+            Write-Host "  • Model ID: $bedrockModelValue"
+            Write-Host "  • Deployment Region: $awsRegionValue"
+            
+            # Determine model name based on model ID
+            if ($bedrockModelValue -match 'claude-sonnet-4-20250514-v1:0') {
+                Write-Host "  • Model Name: Claude Sonnet 4 (Latest)"
+            } elseif ($bedrockModelValue -match 'claude-3-7-sonnet-20250219-v1:0') {
+                Write-Host "  • Model Name: Claude 3.7 Sonnet"
+            } else {
+                Write-Host "  • Model Name: Custom/Unknown"
+            }
+            
+            # Show region prefix
+            if ($bedrockModelValue -match '^us\.anthropic\.') {
+                Write-Host "  • Region Prefix: us (US models)"
+            } elseif ($bedrockModelValue -match '^apac\.anthropic\.') {
+                Write-Host "  • Region Prefix: apac (Asia Pacific models)"
+            } else {
+                Write-Host "  • Region Prefix: Unknown"
+            }
+            Write-Host "=================================="
+        }
+        
         $response = Read-Host "Do you want to reconfigure? (y/N)"
         if ($response -notmatch '^[yY]') {
             Write-Status "Using existing configuration"
@@ -981,6 +1135,88 @@ naming_convention = {
     }
 }
 
+# Function to build and upload frontend
+function Build-AndUploadFrontend {
+    $tfvarsFile = "terraform.tfvars"
+    
+    Write-Status "Checking frontend build configuration..."
+    
+    if (Test-Path $tfvarsFile) {
+        $content = Get-Content $tfvarsFile -Raw
+        $buildUploadValue = "false"
+        
+        if ($content -match 'build_and_upload\s*=\s*(true|false)') {
+            $buildUploadValue = $matches[1]
+        }
+        
+        Write-Status "Found build_and_upload = $buildUploadValue"
+        
+        if ($buildUploadValue -eq "true") {
+            Write-Status "Building and uploading React frontend..."
+            
+            # Get frontend bucket name from Terraform output
+            try {
+                $frontendConfigJson = terraform output -json frontend_config 2>$null | ConvertFrom-Json
+                $frontendBucket = $frontendConfigJson.s3_bucket_name
+                $cloudfrontId = $frontendConfigJson.cloudfront_distribution_id
+            } catch {
+                $frontendBucket = ""
+                $cloudfrontId = ""
+            }
+            
+            Write-Status "Frontend bucket: $frontendBucket"
+            Write-Status "CloudFront ID: $cloudfrontId"
+            
+            if ($frontendBucket) {
+                # Build React app
+                Write-Status "Building React application..."
+                Push-Location "..\..\frontend\app"
+                
+                try {
+                    if (-not (Test-Path "package.json")) {
+                        Write-ErrorMsg "Frontend package.json not found at $(Get-Location)"
+                        Pop-Location
+                        return $false
+                    }
+                    
+                    Write-Status "Installing npm dependencies..."
+                    npm install
+                    
+                    Write-Status "Building React app..."
+                    npm run build
+                    
+                    # Upload to S3
+                    Write-Status "Uploading to S3 bucket: $frontendBucket"
+                    aws s3 sync dist/ "s3://$frontendBucket/" --delete
+                    
+                    # Invalidate CloudFront cache
+                    if ($cloudfrontId) {
+                        Write-Status "Invalidating CloudFront cache: $cloudfrontId"
+                        aws cloudfront create-invalidation --distribution-id $cloudfrontId --paths "/*" | Out-Null
+                        Write-Success "CloudFront cache invalidated"
+                    }
+                    
+                    Write-Success "Frontend build and upload completed"
+                    return $true
+                } finally {
+                    Pop-Location
+                    Push-Location "..\..\backend\environment"
+                }
+            } else {
+                Write-Warning "Frontend bucket name not found - checking Terraform outputs..."
+                terraform output
+                return $false
+            }
+        } else {
+            Write-Status "Frontend build disabled (build_and_upload = $buildUploadValue)"
+            return $true
+        }
+    } else {
+        Write-Warning "terraform.tfvars file not found at $(Get-Location)\$tfvarsFile"
+        return $false
+    }
+}
+
 # Function to deploy infrastructure
 function Deploy-Infrastructure {
     Write-Status "Deploying infrastructure..."
@@ -995,32 +1231,183 @@ function Deploy-Infrastructure {
     Push-Location environment
     
     try {
+        # Get deployment region from tfvars
+        $deployRegion = "us-east-1"
+        if (Test-Path "terraform.tfvars") {
+            $content = Get-Content "terraform.tfvars" -Raw
+            if ($content -match 'aws_region\s*=\s*"([^"]+)"') {
+                $deployRegion = $matches[1]
+            }
+        }
+        
         Write-Status "Initializing Terraform with backend..."
         terraform init `
             -backend-config="bucket=$env:TF_BACKEND_BUCKET" `
             -backend-config="key=environment/terraform.tfstate" `
-            -backend-config="region=$script:DeploymentRegion" `
-            -backend-config="dynamodb_table=$env:TF_BACKEND_TABLE"
+            -backend-config="region=$deployRegion" `
+            -backend-config="dynamodb_table=$env:TF_BACKEND_TABLE" `
+            -migrate-state
         
         Write-Status "Planning deployment..."
-        terraform plan -var="backend_random_suffix=$env:TF_BACKEND_RANDOM_SUFFIX" -out=tfplan
+        terraform plan `
+            -var="s3_backend_bucket=$env:TF_BACKEND_BUCKET" `
+            -var="dynamodb_backend_table=$env:TF_BACKEND_TABLE" `
+            -var="backend_random_suffix=$env:TF_BACKEND_RANDOM_SUFFIX" `
+            -out=tfplan
         
-        Write-Status "Applying infrastructure changes..."
-        terraform apply tfplan
-        
-        Remove-Item tfplan -ErrorAction SilentlyContinue
-        
-        # Create deployment marker
-        Set-Content -Path ".deployment_marker" -Value (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+        if ($script:RedeployMode) {
+            Write-Status "Auto-applying changes (redeploy mode)..."
+            terraform apply -auto-approve tfplan
+            Remove-Item tfplan -ErrorAction SilentlyContinue
+        } else {
+            Write-Status "Review the plan above. Do you want to continue? (y/N)"
+            $response = Read-Host
+            if ($response -match '^[yY]') {
+                terraform apply tfplan
+                Remove-Item tfplan -ErrorAction SilentlyContinue
+            } else {
+                Write-Warning "Deployment cancelled"
+                Remove-Item tfplan -ErrorAction SilentlyContinue
+                exit 0
+            }
+        }
         
         Write-Success "Infrastructure deployed successfully!"
         
-        # Show outputs
-        Write-Status ""
-        Write-Status "Deployment Outputs:"
-        Write-Host "=================================="
-        terraform output
-        Write-Host "=================================="
+        # Build and upload frontend after infrastructure deployment
+        Build-AndUploadFrontend
+        
+        # Check if this is an initial deployment or redeployment
+        $initialDeployment = $false
+        
+        if (-not (Test-Path ".deployment_marker")) {
+            $initialDeployment = $true
+            # Create marker file for future runs
+            Set-Content -Path ".deployment_marker" -Value (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+            Write-Status "Initial deployment detected"
+        } else {
+            Write-Status "Redeployment detected - skipping Lambda invocation"
+        }
+        
+        # Only trigger Lambda function on initial deployment
+        if ($initialDeployment) {
+            Write-Status "Triggering initial health events collection..."
+            
+            try {
+                $eventProcessorName = terraform output -raw event_processor_function_name 2>$null
+                
+                if ($eventProcessorName) {
+                    Write-Status "Invoking function asynchronously: $eventProcessorName"
+                    
+                    $tempResponse = [System.IO.Path]::GetTempFileName()
+                    
+                    try {
+                        aws lambda invoke `
+                            --region $deployRegion `
+                            --function-name $eventProcessorName `
+                            --invocation-type Event `
+                            --payload '{}' `
+                            $tempResponse 2>$null | Out-Null
+                        
+                        Write-Success "Initial health events collection triggered successfully"
+                        Write-Status "Monitoring execution progress..."
+                        Write-Status "Waiting for function to complete (checking every 30 seconds)..."
+                        
+                        # Monitor function completion (max 15 minutes)
+                        for ($i = 1; $i -le 30; $i++) {
+                            Write-Host "." -NoNewline
+                            
+                            # Calculate start time (5 minutes ago)
+                            $startTime = [DateTimeOffset]::UtcNow.AddMinutes(-5).ToUnixTimeMilliseconds()
+                            
+                            # Get the latest log stream
+                            try {
+                                $latestLogStream = aws logs describe-log-streams `
+                                    --region $deployRegion `
+                                    --log-group-name "/aws/lambda/$eventProcessorName" `
+                                    --order-by LastEventTime `
+                                    --descending `
+                                    --limit 1 `
+                                    --query 'logStreams[0].logStreamName' `
+                                    --output text 2>$null
+                                
+                                if ($latestLogStream -and $latestLogStream -ne "None") {
+                                    $logFilterResult = aws logs filter-log-events `
+                                        --region $deployRegion `
+                                        --log-group-name "/aws/lambda/$eventProcessorName" `
+                                        --log-stream-names $latestLogStream `
+                                        --start-time $startTime `
+                                        --filter-pattern "END" `
+                                        --query 'events[0].message' `
+                                        --output text 2>$null
+                                    
+                                    if ($logFilterResult -match "END RequestId") {
+                                        Write-Host ""
+                                        Write-Success "Event processor execution completed"
+                                        break
+                                    }
+                                }
+                            } catch {
+                                # Continue monitoring
+                            }
+                            
+                            if ($i -eq 30) {
+                                Write-Host ""
+                                Write-Warning "Function may still be running - continuing with deployment"
+                                Write-Status "Check CloudWatch logs: /aws/lambda/$eventProcessorName"
+                                break
+                            }
+                            
+                            Start-Sleep -Seconds 30
+                        }
+                        
+                        Write-Status "Lambda monitoring process completed"
+                    } finally {
+                        Remove-Item $tempResponse -ErrorAction SilentlyContinue
+                    }
+                } else {
+                    Write-Warning "Event processor function name not found - skipping initial trigger"
+                }
+            } catch {
+                Write-Warning "Failed to invoke Lambda function - events will be collected on next scheduled run"
+            }
+            
+            Write-Success "Initial data collection process completed"
+        }
+        
+        # Check if frontend is enabled
+        $buildAndUpload = "false"
+        if (Test-Path "terraform.tfvars") {
+            $content = Get-Content "terraform.tfvars" -Raw
+            if ($content -match 'build_and_upload\s*=\s*(true|false)') {
+                $buildAndUpload = $matches[1]
+            }
+        }
+        
+        if ($buildAndUpload -eq "true") {
+            Write-Status "Your React app:"
+            Write-Host "=================================="
+            terraform output frontend_config 2>$null
+            Write-Host "=================================="
+        } else {
+            Write-Status "S3 Bucket (for email attachments):"
+            Write-Host "=================================="
+            try {
+                $frontendConfigJson = terraform output -json frontend_config 2>$null | ConvertFrom-Json
+                $bucketName = $frontendConfigJson.s3_bucket_name
+                if ($bucketName) {
+                    Write-Host "s3_bucket_name = `"$bucketName`""
+                    Write-Host ""
+                    Write-Host "Note: Frontend (CloudFront/API Gateway) not deployed (build_and_upload = false)"
+                    Write-Host "      S3 bucket is used for email attachments only"
+                } else {
+                    Write-Host "S3 bucket not available"
+                }
+            } catch {
+                Write-Host "S3 bucket not available"
+            }
+            Write-Host "=================================="
+        }
         
     } finally {
         Pop-Location
@@ -1031,48 +1418,438 @@ function Deploy-Infrastructure {
 function Invoke-DestroyWithRetry {
     $maxAttempts = 3
     $attempt = 1
+    $destroySuccess = $false
     
-    while ($attempt -le $maxAttempts) {
-        Write-Status "Destroy attempt $attempt of $maxAttempts..."
-        
-        try {
-            terraform destroy -auto-approve
-            Write-Success "Infrastructure destroyed successfully"
-            return $true
-        } catch {
-            Write-Warning "Destroy attempt $attempt failed: $_"
-            
-            if ($attempt -lt $maxAttempts) {
-                Write-Status "Waiting 10 seconds before retry..."
-                Start-Sleep -Seconds 10
-            }
-            
-            $attempt++
-        }
+    # Check if we have a valid terraform configuration
+    if (-not (Test-Path "terraform.tfvars") -and -not (Test-Path "main.tf")) {
+        Write-ErrorMsg "No terraform configuration found in current directory"
+        return $false
     }
     
-    Write-ErrorMsg "Failed to destroy infrastructure after $maxAttempts attempts"
-    return $false
+    while ($attempt -le $maxAttempts -and -not $destroySuccess) {
+        Write-Status "Destroy attempt $attempt of $maxAttempts..."
+        
+        # Refresh state before destroy attempt
+        Write-Status "Refreshing Terraform state..."
+        try {
+            terraform refresh -auto-approve 2>$null | Out-Null
+        } catch {
+            Write-Warning "State refresh failed, attempting to continue..."
+        }
+        
+        # Attempt destroy
+        $destroyCmd = "terraform destroy -auto-approve"
+        if (Test-Path "terraform.tfvars") {
+            $destroyCmd += " -var-file=terraform.tfvars"
+        }
+        
+        $tempLog = [System.IO.Path]::GetTempFileName()
+        
+        try {
+            $destroyOutput = Invoke-Expression "$destroyCmd 2>&1" | Tee-Object -FilePath $tempLog
+            
+            # Check if Terraform actually destroyed anything
+            if ($destroyOutput -match "Resources: 0 destroyed") {
+                Write-Warning "Terraform reports 0 resources destroyed - state may be out of sync"
+                Write-Status "Checking if resources actually exist in AWS..."
+                
+                # Force a state refresh and try again
+                terraform refresh -auto-approve 2>$null | Out-Null
+                
+                # Try destroy again after refresh
+                $retryOutput = Invoke-Expression "$destroyCmd 2>&1"
+                if ($retryOutput -match "Resources: 0 destroyed") {
+                    Write-Warning "Still 0 resources destroyed after refresh - state may be completely out of sync"
+                    $destroySuccess = $false
+                } else {
+                    $destroySuccess = $true
+                    Write-Success "Infrastructure destroyed successfully after state refresh"
+                }
+            } else {
+                $destroySuccess = $true
+                Write-Success "Infrastructure destroyed successfully"
+            }
+        } catch {
+            Write-Warning "Destroy attempt $attempt failed"
+            Write-Status "Last few lines of destroy output:"
+            if (Test-Path $tempLog) {
+                Get-Content $tempLog -Tail 10
+            }
+            
+            if ($attempt -lt $maxAttempts) {
+                Write-Status "Trying targeted destroy for common problematic resources..."
+                
+                # Try to destroy resources that commonly cause issues
+                $problematicResources = @(
+                    "aws_lambda_event_source_mapping.event_processing_trigger",
+                    "module.lambda.aws_lambda_event_source_mapping.events_stream",
+                    "module.api_gateway.aws_lambda_permission.dashboard_api_gateway",
+                    "module.api_gateway.aws_lambda_permission.events_api_gateway",
+                    "module.api_gateway.aws_lambda_permission.filters_api_gateway",
+                    "aws_lambda_permission.eventbridge_cross_region",
+                    "module.frontend.null_resource.build_and_upload",
+                    "module.frontend.aws_cloudfront_distribution.frontend",
+                    "module.api_gateway",
+                    "module.lambda",
+                    "module.eventbridge_us_east_1_deployment",
+                    "module.eventbridge_us_east_1_monitoring",
+                    "module.eventbridge_us_east_2",
+                    "module.eventbridge_us_west_1",
+                    "module.eventbridge_us_west_2",
+                    "module.eventbridge_eu_west_1",
+                    "module.sqs",
+                    "module.dynamodb",
+                    "module.frontend",
+                    "module.cognito",
+                    "module.cloudwatch",
+                    "module.iam"
+                )
+                
+                foreach ($resource in $problematicResources) {
+                    Write-Status "Attempting to destroy: $resource"
+                    try {
+                        $targetOutput = terraform destroy -target="$resource" -auto-approve 2>&1
+                        if ($targetOutput -match "No instances found") {
+                            Write-Status "Resource $resource not found (already destroyed)"
+                        } else {
+                            Write-Status "Successfully destroyed: $resource"
+                        }
+                    } catch {
+                        Write-Warning "Failed to destroy: $resource"
+                    }
+                    Start-Sleep -Seconds 2
+                }
+                
+                # Try a state refresh after targeted destroys
+                Write-Status "Refreshing state after targeted destroys..."
+                terraform refresh -auto-approve 2>$null | Out-Null
+                
+                Write-Status "Waiting 15 seconds before retry..."
+                Start-Sleep -Seconds 15
+            }
+        } finally {
+            Remove-Item $tempLog -ErrorAction SilentlyContinue
+        }
+        
+        $attempt++
+    }
+    
+    if (-not $destroySuccess) {
+        Write-ErrorMsg "All destroy attempts failed. Manual cleanup may be required."
+        
+        # Show what resources are still in state
+        Write-Status "Remaining resources in Terraform state:"
+        try {
+            $stateResources = terraform state list 2>$null
+            if ($stateResources) {
+                $stateResources | ForEach-Object { Write-Host $_ }
+                Write-Host ""
+                Write-Status "Detailed troubleshooting steps:"
+                Write-Status "1. Check AWS Console for remaining resources"
+                Write-Status "2. Try destroying specific resources: terraform destroy -target=<resource_name>"
+                Write-Status "3. Check for resources in multiple regions (EventBridge rules)"
+                Write-Status "4. Look for dependency issues in the destroy log above"
+                Write-Status "5. Use AWS CLI to delete stubborn resources manually"
+            } else {
+                Write-Warning "Terraform state is empty but AWS resources may still exist!"
+                Write-Status "This suggests state corruption or resources created outside Terraform."
+                Write-Status "Offering manual cleanup options..."
+                
+                # Offer manual cleanup
+                $manualCleanup = Read-Host "Would you like to attempt manual cleanup of detected resources? (y/N)"
+                if ($manualCleanup -match '^[yY]') {
+                    Invoke-ManualResourceCleanup
+                }
+            }
+        } catch {
+            Write-Warning "Could not check Terraform state"
+        }
+        
+        # Still mark as partially successful to continue with cleanup
+        Write-Warning "Continuing with local cleanup despite destroy failures"
+    }
+    
+    return $destroySuccess
 }
 
 # Function to check if resources are destroyed
 function Test-ResourcesDestroyed {
-    Write-Status "Checking if resources are destroyed..."
+    Write-Status "Verifying main infrastructure resource destruction..."
+    Write-Status "(Note: Backend storage resources are checked separately)"
     
-    try {
-        $state = terraform show -json 2>$null | ConvertFrom-Json
+    $resourcesExist = $false
+    
+    # Try to determine the naming pattern from terraform.tfvars
+    $namePattern = "health-dashboard"
+    $tfvarsFile = "terraform.tfvars"
+    
+    if (Test-Path $tfvarsFile) {
+        $content = Get-Content $tfvarsFile -Raw
         
-        if ($state.values.root_module.resources.Count -eq 0) {
-            Write-Success "All resources destroyed"
-            return $true
-        } else {
-            Write-Warning "Some resources still exist: $($state.values.root_module.resources.Count) resources"
-            return $false
+        # Extract project name
+        $projectName = "health-dashboard"
+        if ($content -match 'project_name\s*=\s*"([^"]+)"') {
+            $projectName = $matches[1]
+        }
+        
+        # Extract naming convention components
+        $prefix = ""
+        $suffix = ""
+        if ($content -match 'naming_convention\s*=\s*\{[^}]*prefix\s*=\s*"([^"]*)"') {
+            $prefix = $matches[1]
+        }
+        if ($content -match 'naming_convention\s*=\s*\{[^}]*suffix\s*=\s*"([^"]*)"') {
+            $suffix = $matches[1]
+        }
+        
+        # Build the expected name pattern
+        $namePattern = $projectName
+        if ($prefix) { $namePattern = "$prefix-$namePattern" }
+        if ($suffix) { $namePattern = "$namePattern-$suffix" }
+        
+        Write-Status "Looking for resources with pattern: $namePattern"
+    } else {
+        Write-Warning "terraform.tfvars not found, using default pattern: $namePattern"
+    }
+    
+    # Check Lambda functions (excluding backend-related functions)
+    try {
+        $lambdaFunctions = aws lambda list-functions `
+            --query "Functions[?contains(FunctionName, '$namePattern')].[FunctionName]" `
+            --output text 2>$null | Where-Object { $_ -notmatch "backend|terraform" }
+        
+        if ($lambdaFunctions) {
+            Write-Warning "Main infrastructure Lambda functions still exist: $lambdaFunctions"
+            $resourcesExist = $true
         }
     } catch {
-        Write-Status "Cannot verify resource state"
-        return $false
+        # Continue checking
     }
+    
+    # Check DynamoDB tables (only main infrastructure tables)
+    try {
+        $allTables = aws dynamodb list-tables --query "TableNames" --output text 2>$null
+        $mainInfraTables = @()
+        
+        foreach ($table in $allTables -split '\s+') {
+            if ($table -match "$namePattern.*(events|filters|counts)$" -and $table -notmatch "backend") {
+                $mainInfraTables += $table
+            }
+        }
+        
+        if ($mainInfraTables.Count -gt 0) {
+            Write-Warning "Main infrastructure DynamoDB tables still exist: $($mainInfraTables -join ', ')"
+            $resourcesExist = $true
+        }
+    } catch {
+        # Continue checking
+    }
+    
+    # Check API Gateway
+    try {
+        $apiGateways = aws apigateway get-rest-apis `
+            --query "items[?contains(name, '$namePattern')]" `
+            --output text 2>$null
+        
+        if ($apiGateways) {
+            Write-Warning "API Gateway still exists"
+            $resourcesExist = $true
+        }
+    } catch {
+        # Continue checking
+    }
+    
+    # Check S3 buckets (frontend bucket, excluding backend buckets)
+    try {
+        $s3Buckets = aws s3 ls 2>$null | 
+            Select-String $namePattern | 
+            Where-Object { $_ -notmatch "backend|terraform" } |
+            ForEach-Object { ($_ -split '\s+')[2] }
+        
+        if ($s3Buckets) {
+            Write-Warning "Main infrastructure S3 buckets still exist: $($s3Buckets -join ', ')"
+            $resourcesExist = $true
+        }
+    } catch {
+        # Continue checking
+    }
+    
+    if ($resourcesExist) {
+        return $false
+    } else {
+        Write-Success "Main infrastructure destruction verified (backend storage preserved)"
+        return $true
+    }
+}
+
+# Function to empty S3 buckets before destroy
+function Clear-S3BucketsBeforeDestroy {
+    param(
+        [string]$BackendBucket
+    )
+    
+    Write-Status "Emptying S3 buckets before destroy..."
+    
+    # Empty backend bucket if provided
+    if ($BackendBucket) {
+        Write-Status "Emptying backend S3 bucket: $BackendBucket"
+        try {
+            aws s3 rm "s3://$BackendBucket" --recursive 2>$null | Out-Null
+        } catch {
+            Write-Warning "Could not empty backend bucket: $BackendBucket"
+        }
+    }
+    
+    # Find and empty frontend bucket
+    try {
+        $frontendBucket = aws s3 ls 2>$null | 
+            Select-String "health-dashboard.*frontend" | 
+            Select-Object -First 1 |
+            ForEach-Object { ($_ -split '\s+')[2] }
+        
+        if ($frontendBucket) {
+            Write-Status "Emptying frontend S3 bucket: $frontendBucket"
+            aws s3 rm "s3://$frontendBucket" --recursive 2>$null | Out-Null
+        }
+    } catch {
+        # Continue
+    }
+    
+    Write-Success "S3 buckets emptied"
+}
+
+# Function to manually clean up resources when Terraform state is out of sync
+function Invoke-ManualResourceCleanup {
+    Write-Status "Attempting manual cleanup of detected resources..."
+    
+    # Try to determine the naming pattern from terraform.tfvars
+    $namePattern = "health-dashboard"
+    $tfvarsFile = "terraform.tfvars"
+    
+    if (Test-Path $tfvarsFile) {
+        $content = Get-Content $tfvarsFile -Raw
+        
+        $projectName = "health-dashboard"
+        if ($content -match 'project_name\s*=\s*"([^"]+)"') {
+            $projectName = $matches[1]
+        }
+        
+        $prefix = ""
+        $suffix = ""
+        if ($content -match 'naming_convention\s*=\s*\{[^}]*prefix\s*=\s*"([^"]*)"') {
+            $prefix = $matches[1]
+        }
+        if ($content -match 'naming_convention\s*=\s*\{[^}]*suffix\s*=\s*"([^"]*)"') {
+            $suffix = $matches[1]
+        }
+        
+        $namePattern = $projectName
+        if ($prefix) { $namePattern = "$prefix-$namePattern" }
+        if ($suffix) { $namePattern = "$namePattern-$suffix" }
+    }
+    
+    Write-Status "Using pattern: $namePattern"
+    
+    # Clean up Lambda functions
+    Write-Status "Cleaning up Lambda functions..."
+    try {
+        $lambdaFunctions = aws lambda list-functions `
+            --query "Functions[?contains(FunctionName, '$namePattern')].[FunctionName]" `
+            --output text 2>$null | Where-Object { $_ -notmatch "backend|terraform" }
+        
+        foreach ($func in $lambdaFunctions) {
+            if ($func) {
+                Write-Status "Deleting Lambda function: $func"
+                aws lambda delete-function --function-name $func 2>$null
+            }
+        }
+    } catch {
+        Write-Warning "Failed to clean up Lambda functions"
+    }
+    
+    # Clean up DynamoDB tables
+    Write-Status "Cleaning up DynamoDB tables..."
+    try {
+        $allTables = aws dynamodb list-tables --query "TableNames" --output text 2>$null
+        foreach ($table in $allTables -split '\s+') {
+            if ($table -match "$namePattern.*(events|filters|counts)$" -and $table -notmatch "backend") {
+                Write-Status "Deleting DynamoDB table: $table"
+                aws dynamodb delete-table --table-name $table 2>$null
+            }
+        }
+    } catch {
+        Write-Warning "Failed to clean up DynamoDB tables"
+    }
+    
+    # Clean up S3 buckets (frontend)
+    Write-Status "Cleaning up S3 buckets..."
+    try {
+        $s3Buckets = aws s3 ls 2>$null | 
+            Select-String $namePattern | 
+            Where-Object { $_ -notmatch "backend|terraform" } |
+            ForEach-Object { ($_ -split '\s+')[2] }
+        
+        foreach ($bucket in $s3Buckets) {
+            if ($bucket) {
+                Write-Status "Emptying and deleting S3 bucket: $bucket"
+                aws s3 rm "s3://$bucket" --recursive 2>$null
+                aws s3 rb "s3://$bucket" 2>$null
+            }
+        }
+    } catch {
+        Write-Warning "Failed to clean up S3 buckets"
+    }
+    
+    # Clean up API Gateway
+    Write-Status "Cleaning up API Gateway..."
+    try {
+        $apiIds = aws apigateway get-rest-apis `
+            --query "items[?contains(name, '$namePattern')].id" `
+            --output text 2>$null
+        
+        foreach ($apiId in $apiIds -split '\s+') {
+            if ($apiId) {
+                Write-Status "Deleting API Gateway: $apiId"
+                aws apigateway delete-rest-api --rest-api-id $apiId 2>$null
+            }
+        }
+    } catch {
+        Write-Warning "Failed to clean up API Gateway"
+    }
+    
+    Write-Status "Manual cleanup completed. Some resources may take time to fully delete."
+}
+
+# Function to empty S3 buckets before destroy
+function Clear-S3Buckets {
+    param(
+        [string]$BackendBucket
+    )
+    
+    Write-Status "Emptying S3 buckets before destroy..."
+    
+    # Empty backend bucket if provided
+    if ($BackendBucket) {
+        Write-Status "Emptying backend S3 bucket: $BackendBucket"
+        aws s3 rm "s3://$BackendBucket" --recursive 2>$null | Out-Null
+    }
+    
+    # Find and empty frontend bucket
+    try {
+        $frontendBucket = aws s3 ls 2>$null | 
+            Select-String "health-dashboard.*frontend" | 
+            Select-Object -First 1 |
+            ForEach-Object { ($_ -split '\s+')[2] }
+        
+        if ($frontendBucket) {
+            Write-Status "Emptying frontend S3 bucket: $frontendBucket"
+            aws s3 rm "s3://$frontendBucket" --recursive 2>$null | Out-Null
+        }
+    } catch {
+        # Continue
+    }
+    
+    Write-Success "S3 buckets emptied"
 }
 
 # Function to destroy infrastructure
@@ -1093,12 +1870,17 @@ function Remove-Infrastructure {
     
     if ($response -eq "yes") {
         $deployRegion = "us-east-1"
+        $envName = "unknown"
         
         if (Test-Path "environment\terraform.tfvars") {
             $content = Get-Content "environment\terraform.tfvars" -Raw
             if ($content -match 'aws_region\s*=\s*"([^"]+)"') {
                 $deployRegion = $matches[1]
             }
+            if ($content -match 'environment\s*=\s*"([^"]+)"') {
+                $envName = $matches[1]
+            }
+            Write-Status "Detected deployment region: $deployRegion for environment: $envName"
         }
         
         $backendBucket = ""
@@ -1155,8 +1937,10 @@ function Remove-Infrastructure {
                     terraform init -migrate-state 2>$null | Out-Null
                 }
                 
-                Invoke-DestroyWithRetry
+                # Robust destroy with multiple attempts
+                $destroyResult = Invoke-DestroyWithRetry
                 
+                # Check if destroy was actually successful before removing marker
                 if (Test-ResourcesDestroyed) {
                     if (Test-Path ".deployment_marker") {
                         Remove-Item ".deployment_marker"
@@ -1179,6 +1963,7 @@ function Remove-Infrastructure {
                     terraform init 2>$null | Out-Null
                     Invoke-DestroyWithRetry
                     
+                    # Clean up deployment marker after local state destroy
                     if (Test-Path ".deployment_marker") {
                         Remove-Item ".deployment_marker"
                         Write-Status "Removed deployment marker file"
@@ -1186,6 +1971,7 @@ function Remove-Infrastructure {
                 } else {
                     Write-Warning "No terraform state found. Infrastructure may already be destroyed."
                     
+                    # Clean up deployment marker even if no state found
                     if (Test-Path ".deployment_marker") {
                         Remove-Item ".deployment_marker"
                         Write-Status "Removed deployment marker file (no state found)"
@@ -1204,6 +1990,7 @@ function Remove-Infrastructure {
             Write-Success "Main infrastructure destroyed (backend preserved)"
         }
         
+        # Final cleanup - ensure deployment marker is removed after successful destroy
         if (Test-Path "environment\.deployment_marker") {
             Remove-Item "environment\.deployment_marker"
             Write-Status "Final cleanup: Removed deployment marker file"
@@ -1224,6 +2011,9 @@ function Remove-BackendInfrastructure {
     Write-Status "Destroying backend infrastructure..."
     
     if ($BackendBucket -and $BackendTable) {
+        # Empty S3 buckets first
+        Clear-S3BucketsBeforeDestroy -BackendBucket $BackendBucket
+        
         $backendSetupPaths = @(
             "..\backend-setup",
             "backend-setup",
@@ -1252,11 +2042,22 @@ function Remove-BackendInfrastructure {
                 Write-Status "Recreating backend state for safe destruction..."
                 terraform init 2>$null | Out-Null
                 
+                # Import existing resources into terraform state
                 terraform import -var="aws_profile=$script:SelectedAwsProfile" -var="aws_region=$DeployRegion" aws_s3_bucket.terraform_state $BackendBucket 2>$null | Out-Null
                 terraform import -var="aws_profile=$script:SelectedAwsProfile" -var="aws_region=$DeployRegion" aws_dynamodb_table.terraform_locks $BackendTable 2>$null | Out-Null
+                
+                # Try to extract and import random suffix
+                if ($BackendBucket -match '([a-f0-9]{8})$') {
+                    $randomSuffix = $matches[1]
+                    terraform import -var="aws_profile=$script:SelectedAwsProfile" -var="aws_region=$DeployRegion" random_id.bucket_suffix $randomSuffix 2>$null | Out-Null
+                }
             }
             
-            if (-not (terraform destroy -auto-approve -var="aws_profile=$script:SelectedAwsProfile" -var="aws_region=$DeployRegion")) {
+            # Now destroy with proper state
+            try {
+                terraform destroy -auto-approve -var="aws_profile=$script:SelectedAwsProfile" -var="aws_region=$DeployRegion"
+                Write-Success "Backend infrastructure destroyed"
+            } catch {
                 Write-Warning "Backend destruction failed, attempting manual cleanup..."
                 Invoke-ManualBackendCleanup -BackendBucket $BackendBucket -BackendTable $BackendTable
             }
@@ -1357,6 +2158,13 @@ switch ($Command.ToLower()) {
                 $env:AWS_PROFILE = $script:SelectedAwsProfile
                 Write-Status "Set AWS profile for operations: $script:SelectedAwsProfile"
             }
+        }
+        
+        # Check Bedrock access for existing configurations in redeploy mode (after profile is set)
+        if (-not $script:SkipBedrockValidation -and ($script:RedeployMode -or $script:UsingExistingConfig)) {
+            Test-ExistingBedrockAccess
+        } elseif ($script:SkipBedrockValidation) {
+            Write-Warning "Skipping Bedrock validation for existing configuration (-SkipBedrockValidation flag used)"
         }
         
         Setup-Backend
