@@ -303,11 +303,11 @@ function Configure-DeploymentRegion {
     
     if ($script:DeploymentRegion -eq "us-east-1") {
         $script:BedrockRegionPrefix = "us"
+        Write-Status "Bedrock models will use '$script:BedrockRegionPrefix.anthropic.*' prefix"
     } elseif ($script:DeploymentRegion -eq "ap-southeast-1") {
         $script:BedrockRegionPrefix = "apac"
+        Write-Status "Bedrock models will use '$script:BedrockRegionPrefix.anthropic.*' prefix (except Claude 3.5 Sonnet)"
     }
-    
-    Write-Status "Bedrock models will use '$script:BedrockRegionPrefix.anthropic.*' prefix"
 }
 
 # Function to configure health monitoring regions
@@ -335,20 +335,29 @@ function Configure-HealthMonitoringRegions {
     
     Write-Status "Available regions:"
     for ($i = 0; $i -lt $regions.Count; $i++) {
+        $num = "{0,2}" -f ($i+1)
+        $region = "{0,-20}" -f $regions[$i]
+        $desc = $descriptions[$i]
         if ($regions[$i] -eq "us-east-1") {
-            Write-Host "  $($i+1)) $($regions[$i]) - $($descriptions[$i]) (always included)"
+            Write-Host "  $num) $region $desc (always included)"
         } else {
-            Write-Host "  $($i+1)) $($regions[$i]) - $($descriptions[$i])"
+            Write-Host "  $num) $region $desc"
         }
     }
     
     Write-Host ""
-    Write-Host "  $($regions.Count+1)) All regions"
-    Write-Host "  $($regions.Count+2)) Common regions (us-east-1, us-west-2, eu-west-1)"
-    Write-Host "  $($regions.Count+3)) US regions only"
-    Write-Host "  $($regions.Count+4)) EU regions only"
-    Write-Host "  $($regions.Count+5)) Custom selection"
-    Write-Host "  $($regions.Count+6)) Skip (us-east-1 only)"
+    $num1 = "{0,2}" -f ($regions.Count+1)
+    $num2 = "{0,2}" -f ($regions.Count+2)
+    $num3 = "{0,2}" -f ($regions.Count+3)
+    $num4 = "{0,2}" -f ($regions.Count+4)
+    $num5 = "{0,2}" -f ($regions.Count+5)
+    $num6 = "{0,2}" -f ($regions.Count+6)
+    Write-Host "  $num1) All regions"
+    Write-Host "  $num2) Common regions     (us-east-1, us-west-2, eu-west-1)"
+    Write-Host "  $num3) US regions only"
+    Write-Host "  $num4) EU regions only"
+    Write-Host "  $num5) Custom selection"
+    Write-Host "  $num6) Skip               (us-east-1 only)"
     
     Write-Status ""
     $choice = Read-Host "Select option (1-$($regions.Count+6))"
@@ -532,6 +541,7 @@ function Test-BedrockAccess {
         } elseif ($DeploymentRegion -eq "ap-southeast-1") {
             Write-Host "   • Claude Sonnet 4 (apac.anthropic.claude-sonnet-4-20250514-v1:0)"
             Write-Host "   • Claude 3.7 Sonnet (apac.anthropic.claude-3-7-sonnet-20250219-v1:0)"
+            Write-Host "   • Claude 3.5 Sonnet (anthropic.claude-3-5-sonnet-20240620-v1:0)"
         }
         
         Write-Host "4. Wait for approval (usually instant for Claude models)"
@@ -582,7 +592,6 @@ function Configure-BedrockModel {
     Write-Status "=== Bedrock Model Selection ==="
     Write-Status "Select the Claude model to use for AWS Health event analysis."
     Write-Status "Models are automatically configured for deployment region: $script:DeploymentRegion"
-    Write-Status "Using '$script:BedrockRegionPrefix.anthropic.*' model prefix"
     Write-Status ""
     
     if ($script:DeploymentRegion -eq "us-east-1") {
@@ -590,24 +599,38 @@ function Configure-BedrockModel {
             "us.anthropic.claude-sonnet-4-20250514-v1:0",
             "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
         )
+        $modelNames = @("Claude Sonnet 4 (Latest)", "Claude 3.7 Sonnet")
+        $modelDescriptions = @(
+            "Most advanced model with best analysis quality",
+            "Balanced performance and cost"
+        )
+        $script:BedrockRegionPrefix = "us"
     } elseif ($script:DeploymentRegion -eq "ap-southeast-1") {
         $models = @(
             "apac.anthropic.claude-sonnet-4-20250514-v1:0",
-            "apac.anthropic.claude-3-7-sonnet-20250219-v1:0"
+            "apac.anthropic.claude-3-7-sonnet-20250219-v1:0",
+            "anthropic.claude-3-5-sonnet-20240620-v1:0"
         )
+        $modelNames = @("Claude Sonnet 4 (Latest)", "Claude 3.7 Sonnet", "Claude 3.5 Sonnet")
+        $modelDescriptions = @(
+            "Most advanced model with best analysis quality",
+            "Balanced performance and cost",
+            "Proven model with good performance"
+        )
+        $script:BedrockRegionPrefix = "apac"
     } else {
         $models = @(
             "us.anthropic.claude-sonnet-4-20250514-v1:0",
             "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
         )
+        $modelNames = @("Claude Sonnet 4 (Latest)", "Claude 3.7 Sonnet")
+        $modelDescriptions = @(
+            "Most advanced model with best analysis quality",
+            "Balanced performance and cost"
+        )
+        $script:BedrockRegionPrefix = "us"
         Write-Warning "Unknown deployment region, defaulting to US models"
     }
-    
-    $modelNames = @("Claude Sonnet 4 (Latest)", "Claude 3.7 Sonnet")
-    $modelDescriptions = @(
-        "Most advanced model with best analysis quality",
-        "Balanced performance and cost"
-    )
     
     Write-Status "Available models for region $script:DeploymentRegion ($script:BedrockRegionPrefix prefix):"
     for ($i = 0; $i -lt $models.Count; $i++) {
@@ -907,6 +930,8 @@ function Configure-Deployment {
                 Write-Host "  • Model Name: Claude Sonnet 4 (Latest)"
             } elseif ($bedrockModelValue -match 'claude-3-7-sonnet-20250219-v1:0') {
                 Write-Host "  • Model Name: Claude 3.7 Sonnet"
+            } elseif ($bedrockModelValue -match 'claude-3-5-sonnet-20240620-v1:0') {
+                Write-Host "  • Model Name: Claude 3.5 Sonnet"
             } else {
                 Write-Host "  • Model Name: Custom/Unknown"
             }
@@ -916,6 +941,8 @@ function Configure-Deployment {
                 Write-Host "  • Region Prefix: us (US models)"
             } elseif ($bedrockModelValue -match '^apac\.anthropic\.') {
                 Write-Host "  • Region Prefix: apac (Asia Pacific models)"
+            } elseif ($bedrockModelValue -match '^anthropic\.claude-3-5-sonnet') {
+                Write-Host "  • Region Prefix: none (Direct model access, no cross-region inference)"
             } else {
                 Write-Host "  • Region Prefix: Unknown"
             }
@@ -1854,21 +1881,10 @@ function Clear-S3Buckets {
 
 # Function to destroy infrastructure
 function Remove-Infrastructure {
-    Write-Warning "⚠️  WARNING: This will destroy ALL infrastructure ⚠️"
-    Write-Host ""
-    Write-Status "This will destroy:"
-    Write-Host "  • Lambda functions"
-    Write-Host "  • DynamoDB tables (all data will be lost)"
-    Write-Host "  • API Gateway"
-    Write-Host "  • S3 buckets (frontend and attachments)"
-    Write-Host "  • CloudWatch Log Groups"
-    Write-Host "  • IAM roles and policies"
-    Write-Host "  • EventBridge rules"
-    Write-Host ""
+    Write-Warning "This will destroy ALL infrastructure. Are you sure? (y/N)"
+    $response = Read-Host
     
-    $response = Read-Host "Are you sure you want to destroy the infrastructure? (yes/NO)"
-    
-    if ($response -eq "yes") {
+    if ($response -match '^[yY]') {
         $deployRegion = "us-east-1"
         $envName = "unknown"
         

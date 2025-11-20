@@ -284,6 +284,9 @@ configure_deployment() {
                 *"claude-3-7-sonnet-20250219-v1:0")
                     echo "  • Model Name: Claude 3.7 Sonnet"
                     ;;
+                *"claude-3-5-sonnet-20240620-v1:0")
+                    echo "  • Model Name: Claude 3.5 Sonnet"
+                    ;;
                 *)
                     echo "  • Model Name: Custom/Unknown"
                     ;;
@@ -294,6 +297,8 @@ configure_deployment() {
                 echo "  • Region Prefix: us (US models)"
             elif [[ "$BEDROCK_MODEL_VALUE" == apac.anthropic.* ]]; then
                 echo "  • Region Prefix: apac (Asia Pacific models)"
+            elif [[ "$BEDROCK_MODEL_VALUE" == anthropic.claude-3-5-sonnet* ]]; then
+                echo "  • Region Prefix: none (Direct model access, no cross-region inference)"
             else
                 echo "  • Region Prefix: Unknown"
             fi
@@ -448,11 +453,11 @@ configure_deployment_region() {
             # Set region-specific Bedrock model prefix for later use
             if [ "$DEPLOYMENT_REGION" = "us-east-1" ]; then
                 BEDROCK_REGION_PREFIX="us"
+                print_status "Bedrock models will use '$BEDROCK_REGION_PREFIX.anthropic.*' prefix"
             elif [ "$DEPLOYMENT_REGION" = "ap-southeast-1" ]; then
                 BEDROCK_REGION_PREFIX="apac"
+                print_status "Bedrock models will use '$BEDROCK_REGION_PREFIX.anthropic.*' prefix (except Claude 3.5 Sonnet)"
             fi
-            
-            print_status "Bedrock models will use '$BEDROCK_REGION_PREFIX.anthropic.*' prefix"
             break
         else
             print_warning "Invalid choice. Please enter a number between 1 and ${#DEPLOY_REGIONS[@]}."
@@ -477,19 +482,19 @@ configure_health_monitoring_regions() {
         region="${REGIONS[i]}"
         description="${DESCRIPTIONS[i]}"
         if [ "$region" = "us-east-1" ]; then
-            echo "  $((i+1))) $region - $description (always included)"
+            printf "  %2d) %-20s %-40s\n" "$((i+1))" "$region" "$description (always included)"
         else
-            echo "  $((i+1))) $region - $description"
+            printf "  %2d) %-20s %-40s\n" "$((i+1))" "$region" "$description"
         fi
     done
     
     echo ""
-    echo "  $((${#REGIONS[@]}+1))) All regions"
-    echo "  $((${#REGIONS[@]}+2))) Common regions (us-east-1, us-west-2, eu-west-1)"
-    echo "  $((${#REGIONS[@]}+3))) US regions only"
-    echo "  $((${#REGIONS[@]}+4))) EU regions only"
-    echo "  $((${#REGIONS[@]}+5))) Custom selection"
-    echo "  $((${#REGIONS[@]}+6))) Skip (us-east-1 only)"
+    printf "  %2d) %-20s\n" "$((${#REGIONS[@]}+1))" "All regions"
+    printf "  %2d) %-20s %s\n" "$((${#REGIONS[@]}+2))" "Common regions" "(us-east-1, us-west-2, eu-west-1)"
+    printf "  %2d) %-20s\n" "$((${#REGIONS[@]}+3))" "US regions only"
+    printf "  %2d) %-20s\n" "$((${#REGIONS[@]}+4))" "EU regions only"
+    printf "  %2d) %-20s\n" "$((${#REGIONS[@]}+5))" "Custom selection"
+    printf "  %2d) %-20s %s\n" "$((${#REGIONS[@]}+6))" "Skip" "(us-east-1 only)"
     
     print_status ""
     read -p "Select option (1-$((${#REGIONS[@]}+6))): " choice
@@ -613,8 +618,8 @@ configure_frontend_build_upload() {
     print_status ""
     
     print_status "Options:"
-    echo "  1) Yes - Build and upload frontend automatically during deployment"
-    echo "  2) No  - Skip frontend build/upload (manual deployment required)"
+    echo "  Y) Yes - Build and upload frontend automatically during deployment"
+    echo "  N) No  - Skip frontend build/upload (manual deployment required)"
     echo ""
     
     while true; do
@@ -788,6 +793,7 @@ validate_bedrock_access() {
         elif [ "$deployment_region" = "ap-southeast-1" ]; then
             echo "   • Claude Sonnet 4 (apac.anthropic.claude-sonnet-4-20250514-v1:0)"
             echo "   • Claude 3.7 Sonnet (apac.anthropic.claude-3-7-sonnet-20250219-v1:0)"
+            echo "   • Claude 3.5 Sonnet (anthropic.claude-3-5-sonnet-20240620-v1:0)"
         fi
         
         echo "4. Wait for approval (usually instant for Claude models)"
@@ -1749,25 +1755,27 @@ configure_bedrock_model() {
     print_status "=== Bedrock Model Selection ==="
     print_status "Select the Claude model to use for AWS Health event analysis."
     print_status "Models are automatically configured for deployment region: $DEPLOYMENT_REGION"
-    print_status "Using '$BEDROCK_REGION_PREFIX.anthropic.*' model prefix"
     print_status ""
     
     # Define available models based on deployment region
     if [ "$DEPLOYMENT_REGION" = "us-east-1" ]; then
         MODELS=("us.anthropic.claude-sonnet-4-20250514-v1:0" "us.anthropic.claude-3-7-sonnet-20250219-v1:0")
+        MODEL_NAMES=("Claude Sonnet 4 (Latest)" "Claude 3.7 Sonnet")
+        MODEL_DESCRIPTIONS=("Most advanced model with best analysis quality" "Balanced performance and cost")
         REGION_PREFIX="us"
     elif [ "$DEPLOYMENT_REGION" = "ap-southeast-1" ]; then
-        MODELS=("apac.anthropic.claude-sonnet-4-20250514-v1:0" "apac.anthropic.claude-3-7-sonnet-20250219-v1:0")
+        MODELS=("apac.anthropic.claude-sonnet-4-20250514-v1:0" "apac.anthropic.claude-3-7-sonnet-20250219-v1:0" "anthropic.claude-3-5-sonnet-20240620-v1:0")
+        MODEL_NAMES=("Claude Sonnet 4 (Latest)" "Claude 3.7 Sonnet" "Claude 3.5 Sonnet")
+        MODEL_DESCRIPTIONS=("Most advanced model with best analysis quality" "Balanced performance and cost" "Proven model with good performance")
         REGION_PREFIX="apac"
     else
         # This should not happen with the limited region selection, but keeping as fallback
         MODELS=("us.anthropic.claude-sonnet-4-20250514-v1:0" "us.anthropic.claude-3-7-sonnet-20250219-v1:0")
+        MODEL_NAMES=("Claude Sonnet 4 (Latest)" "Claude 3.7 Sonnet")
+        MODEL_DESCRIPTIONS=("Most advanced model with best analysis quality" "Balanced performance and cost")
         REGION_PREFIX="us"
         print_warning "Unknown deployment region, defaulting to US models"
     fi
-    
-    MODEL_NAMES=("Claude Sonnet 4 (Latest)" "Claude 3.7 Sonnet")
-    MODEL_DESCRIPTIONS=("Most advanced model with best analysis quality" "Balanced performance and cost")
     
     print_status "Available models for region $DEPLOYMENT_REGION ($REGION_PREFIX prefix):"
     for i in "${!MODELS[@]}"; do
