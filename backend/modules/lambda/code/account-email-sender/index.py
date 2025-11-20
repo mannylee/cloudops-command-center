@@ -160,6 +160,15 @@ def process_account_email(message_body):
         events = fetch_events_from_dynamodb(event_keys)
         print(f"Fetched {len(events)} full events from DynamoDB")
         
+        # Filter out global region events for account-specific emails
+        events_before_filter = len(events)
+        events = [e for e in events if e.get('region', '').lower() != 'global']
+        events_after_filter = len(events)
+        
+        if events_before_filter != events_after_filter:
+            print(f"Filtered out {events_before_filter - events_after_filter} global region events")
+            print(f"Remaining events for account email: {events_after_filter}")
+        
         # Generate Excel report
         excel_bytes = create_account_excel_report(events, account_ids, account_names, email_mappings_info)
         
@@ -479,7 +488,7 @@ def create_health_events_sheet(workbook, events, account_ids):
         for col_num, width in enumerate(column_widths, 1):
             ws.column_dimensions[ws.cell(row=1, column=col_num).column_letter].width = width
         
-        # Filter events for specified accounts
+        # Filter events for specified accounts (global events already filtered at process level)
         filtered_events = [e for e in events if e.get('accountId') in account_ids]
         
         # Sort by account ID, then by lastUpdateTime
