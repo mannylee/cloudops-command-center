@@ -385,10 +385,10 @@ def create_master_health_events_sheet(wb, events):
         
         ws = wb.create_sheet('Health Events')
         
-        # Define headers
+        # Define headers (16 columns - added Account Name after Account ID)
         headers = [
             'Event ARN', 'Service', 'Event Type', 'Category', 'Region',
-            'Status', 'Start Time', 'Last Updated', 'Account ID',
+            'Status', 'Start Time', 'Last Updated', 'Account ID', 'Account Name',
             'Risk Level', 'Risk Category', 'Time Sensitivity',
             'Affected Resources', 'Description', 'Required Actions'
         ]
@@ -406,8 +406,8 @@ def create_master_health_events_sheet(wb, events):
             cell.fill = header_fill
             cell.alignment = header_alignment
         
-        # Set column widths
-        column_widths = [50, 20, 30, 20, 15, 15, 20, 20, 15, 15, 20, 20, 30, 60, 60]
+        # Set column widths (16 columns - added 30 for Account Name)
+        column_widths = [50, 20, 30, 20, 15, 15, 20, 20, 15, 30, 15, 20, 20, 30, 60, 60]
         for col_num, width in enumerate(column_widths, 1):
             ws.column_dimensions[ws.cell(row=1, column=col_num).column_letter].width = width
         
@@ -422,12 +422,13 @@ def create_master_health_events_sheet(wb, events):
             ws.cell(row=row_num, column=7).value = event.get('startTime', 'N/A')
             ws.cell(row=row_num, column=8).value = event.get('lastUpdateTime', 'N/A')
             ws.cell(row=row_num, column=9).value = event.get('accountId', 'N/A')
-            ws.cell(row=row_num, column=10).value = event.get('riskLevel', 'N/A')
-            ws.cell(row=row_num, column=11).value = event.get('riskCategory', 'N/A')
-            ws.cell(row=row_num, column=12).value = event.get('timeSensitivity', 'N/A')
-            ws.cell(row=row_num, column=13).value = event.get('affectedResources', 'N/A')
-            ws.cell(row=row_num, column=14).value = event.get('description', 'N/A')
-            ws.cell(row=row_num, column=15).value = event.get('requiredActions', 'N/A')
+            ws.cell(row=row_num, column=10).value = event.get('accountName', 'N/A')
+            ws.cell(row=row_num, column=11).value = event.get('riskLevel', 'N/A')
+            ws.cell(row=row_num, column=12).value = event.get('riskCategory', 'N/A')
+            ws.cell(row=row_num, column=13).value = event.get('timeSensitivity', 'N/A')
+            ws.cell(row=row_num, column=14).value = event.get('affectedResources', 'N/A')
+            ws.cell(row=row_num, column=15).value = event.get('description', 'N/A')
+            ws.cell(row=row_num, column=16).value = event.get('requiredActions', 'N/A')
             
             # Set default row height (15 is Excel's default)
             ws.row_dimensions[row_num].height = 15
@@ -1296,7 +1297,8 @@ def consolidate_accounts_by_email(account_events, email_mappings):
     Group accounts by destination email address
     Aggregate events from multiple accounts mapped to same email
     Include emailMappingsInfo for each account
-    Returns: dict mapping email -> {accountIds, accountNames, events, mappingsInfo}
+    Returns: dict mapping email -> {accountIds, accountNames, eventKeys, mappingsInfo}
+    Note: eventKeys contains only {eventArn, accountId} to keep SQS message size small
     """
     try:
         print("Consolidating accounts by email address...")
@@ -1304,7 +1306,7 @@ def consolidate_accounts_by_email(account_events, email_mappings):
         consolidated = defaultdict(lambda: {
             'accountIds': [],
             'accountNames': [],
-            'events': [],
+            'eventKeys': [],  # Changed from 'events' to 'eventKeys'
             'mappingsInfo': []
         })
         
@@ -1318,7 +1320,15 @@ def consolidate_accounts_by_email(account_events, email_mappings):
                 # Add to consolidated data
                 consolidated[email]['accountIds'].append(account_id)
                 consolidated[email]['accountNames'].append(account_name)
-                consolidated[email]['events'].extend(events)
+                
+                # Extract only event keys (eventArn, accountId) to minimize SQS message size
+                for event in events:
+                    event_key = {
+                        'eventArn': event.get('eventArn'),
+                        'accountId': event.get('accountId')
+                    }
+                    consolidated[email]['eventKeys'].append(event_key)
+                
                 consolidated[email]['mappingsInfo'].append({
                     'accountId': account_id,
                     'accountName': account_name,
@@ -1348,7 +1358,8 @@ def send_account_email_messages(consolidated_data):
     """
     Send SQS messages for each unique email with consolidated account data
     For each unique email with events, create SQS message
-    Include accountIds, accountNames, ownerEmail, isConsolidated, events, emailMappingsInfo
+    Include accountIds, accountNames, ownerEmail, isConsolidated, eventKeys, emailMappingsInfo
+    Note: Sends only event keys (eventArn, accountId) to keep message size under 256KB limit
     """
     try:
         if not ACCOUNT_EMAIL_QUEUE_URL:
@@ -1365,19 +1376,23 @@ def send_account_email_messages(consolidated_data):
                 # Determine if this is a consolidated email
                 is_consolidated = len(data['accountIds']) > 1
                 
-                # Create SQS message
+                # Create SQS message with event keys only (not full events)
                 message = {
                     'accountIds': data['accountIds'],
                     'accountNames': data['accountNames'],
                     'ownerEmail': email,
                     'isConsolidated': is_consolidated,
-                    'events': data['events'],
+                    'eventKeys': data['eventKeys'],  # Changed from 'events' to 'eventKeys'
                     'emailMappingsInfo': data['mappingsInfo'],
                     'timestamp': datetime.now(timezone.utc).isoformat()
                 }
                 
                 # Convert Decimal types to standard Python types for JSON serialization
                 message = convert_decimal_to_number(message)
+                
+                # Log message size for monitoring
+                message_size = len(json.dumps(message))
+                print(f"SQS message size for {email}: {message_size} bytes ({len(data['eventKeys'])} event keys)")
                 
                 # Send to SQS
                 response = sqs_client.send_message(

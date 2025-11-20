@@ -19,8 +19,10 @@ ACCOUNT_EMAIL_CC = os.environ.get('ACCOUNT_EMAIL_CC', '')
 PRESIGNED_URL_EXPIRATION = int(os.environ.get('PRESIGNED_URL_EXPIRATION', '604800'))  # 7 days
 EMAIL_ATTACHMENT_SIZE_THRESHOLD_MB = float(os.environ.get('EMAIL_ATTACHMENT_SIZE_THRESHOLD_MB', '5'))
 LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
+DYNAMODB_HEALTH_EVENTS_TABLE_NAME = os.environ.get('DYNAMODB_HEALTH_EVENTS_TABLE_NAME')
 
 # Initialize AWS clients
+dynamodb = boto3.resource('dynamodb')
 s3_client = boto3.client('s3')
 ses_client = boto3.client('ses')
 
@@ -57,10 +59,88 @@ def lambda_handler(event, context):
     }
 
 
+def fetch_events_from_dynamodb(event_keys):
+    """
+    Fetch full event details from DynamoDB using event keys
+    Uses batch_get_item for efficient retrieval
+    Args:
+        event_keys: List of dicts with {eventArn, accountId}
+    Returns:
+        List of full event objects
+    """
+    try:
+        if not event_keys:
+            print("No event keys to fetch")
+            return []
+        
+        print(f"Fetching {len(event_keys)} events from DynamoDB table: {DYNAMODB_HEALTH_EVENTS_TABLE_NAME}")
+        
+        table = dynamodb.Table(DYNAMODB_HEALTH_EVENTS_TABLE_NAME)
+        events = []
+        
+        # DynamoDB batch_get_item has a limit of 100 items per request
+        batch_size = 100
+        
+        for i in range(0, len(event_keys), batch_size):
+            batch = event_keys[i:i + batch_size]
+            
+            # Build request items for batch_get_item
+            keys = [
+                {
+                    'eventArn': event_key['eventArn'],
+                    'accountId': event_key['accountId']
+                }
+                for event_key in batch
+            ]
+            
+            # Fetch batch from DynamoDB
+            response = dynamodb.batch_get_item(
+                RequestItems={
+                    DYNAMODB_HEALTH_EVENTS_TABLE_NAME: {
+                        'Keys': keys
+                    }
+                }
+            )
+            
+            # Extract items from response
+            batch_events = response.get('Responses', {}).get(DYNAMODB_HEALTH_EVENTS_TABLE_NAME, [])
+            events.extend(batch_events)
+            
+            # Handle unprocessed keys (retry logic)
+            unprocessed = response.get('UnprocessedKeys', {})
+            retry_count = 0
+            max_retries = 3
+            
+            while unprocessed and retry_count < max_retries:
+                print(f"Retrying {len(unprocessed.get(DYNAMODB_HEALTH_EVENTS_TABLE_NAME, {}).get('Keys', []))} unprocessed keys...")
+                retry_count += 1
+                
+                response = dynamodb.batch_get_item(RequestItems=unprocessed)
+                batch_events = response.get('Responses', {}).get(DYNAMODB_HEALTH_EVENTS_TABLE_NAME, [])
+                events.extend(batch_events)
+                unprocessed = response.get('UnprocessedKeys', {})
+            
+            if unprocessed:
+                print(f"Warning: {len(unprocessed.get(DYNAMODB_HEALTH_EVENTS_TABLE_NAME, {}).get('Keys', []))} keys still unprocessed after {max_retries} retries")
+        
+        print(f"Successfully fetched {len(events)} events from DynamoDB")
+        
+        # Verify we got all events
+        if len(events) != len(event_keys):
+            print(f"Warning: Requested {len(event_keys)} events but only fetched {len(events)}")
+        
+        return events
+        
+    except Exception as e:
+        print(f"Error fetching events from DynamoDB: {str(e)}")
+        traceback.print_exc()
+        raise
+
+
 def process_account_email(message_body):
     """
     Process a single account email message
-    Parse SQS message, generate Excel, upload to S3, send email
+    Parse SQS message, fetch full event details from DynamoDB, generate Excel, upload to S3, send email
     """
     try:
         # Parse message
@@ -68,13 +148,17 @@ def process_account_email(message_body):
         account_names = message_body.get('accountNames', [])
         owner_email = message_body.get('ownerEmail')
         is_consolidated = message_body.get('isConsolidated', False)
-        events = message_body.get('events', [])
+        event_keys = message_body.get('eventKeys', [])
         email_mappings_info = message_body.get('emailMappingsInfo', [])
         
         print(f"Processing account email for: {owner_email}")
         print(f"Accounts: {', '.join(account_ids)}")
-        print(f"Events: {len(events)}")
+        print(f"Event keys received: {len(event_keys)}")
         print(f"Consolidated: {is_consolidated}")
+        
+        # Fetch full event details from DynamoDB
+        events = fetch_events_from_dynamodb(event_keys)
+        print(f"Fetched {len(events)} full events from DynamoDB")
         
         # Generate Excel report
         excel_bytes = create_account_excel_report(events, account_ids, account_names, email_mappings_info)
@@ -369,10 +453,10 @@ def create_health_events_sheet(workbook, events, account_ids):
         
         ws = workbook.create_sheet('Health Events')
         
-        # Define headers (15 columns)
+        # Define headers (16 columns - added Account Name after Account ID)
         headers = [
             'Event ARN', 'Service', 'Event Type', 'Category', 'Region',
-            'Status', 'Start Time', 'Last Updated', 'Account ID',
+            'Status', 'Start Time', 'Last Updated', 'Account ID', 'Account Name',
             'Risk Level', 'Risk Category', 'Time Sensitivity',
             'Affected Resources', 'Description', 'Required Actions'
         ]
@@ -390,8 +474,8 @@ def create_health_events_sheet(workbook, events, account_ids):
             cell.fill = header_fill
             cell.alignment = header_alignment
         
-        # Set column widths
-        column_widths = [50, 20, 30, 20, 15, 15, 20, 20, 15, 15, 20, 20, 30, 60, 60]
+        # Set column widths (16 columns - added 30 for Account Name)
+        column_widths = [50, 20, 30, 20, 15, 15, 20, 20, 15, 30, 15, 20, 20, 30, 60, 60]
         for col_num, width in enumerate(column_widths, 1):
             ws.column_dimensions[ws.cell(row=1, column=col_num).column_letter].width = width
         
@@ -413,12 +497,13 @@ def create_health_events_sheet(workbook, events, account_ids):
             ws.cell(row=row_num, column=7).value = event.get('startTime', 'N/A')
             ws.cell(row=row_num, column=8).value = event.get('lastUpdateTime', 'N/A')
             ws.cell(row=row_num, column=9).value = event.get('accountId', 'N/A')
-            ws.cell(row=row_num, column=10).value = event.get('riskLevel', 'N/A')
-            ws.cell(row=row_num, column=11).value = event.get('riskCategory', 'N/A')
-            ws.cell(row=row_num, column=12).value = event.get('timeSensitivity', 'N/A')
-            ws.cell(row=row_num, column=13).value = event.get('affectedResources', 'N/A')
-            ws.cell(row=row_num, column=14).value = event.get('description', 'N/A')
-            ws.cell(row=row_num, column=15).value = event.get('requiredActions', 'N/A')
+            ws.cell(row=row_num, column=10).value = event.get('accountName', 'N/A')
+            ws.cell(row=row_num, column=11).value = event.get('riskLevel', 'N/A')
+            ws.cell(row=row_num, column=12).value = event.get('riskCategory', 'N/A')
+            ws.cell(row=row_num, column=13).value = event.get('timeSensitivity', 'N/A')
+            ws.cell(row=row_num, column=14).value = event.get('affectedResources', 'N/A')
+            ws.cell(row=row_num, column=15).value = event.get('description', 'N/A')
+            ws.cell(row=row_num, column=16).value = event.get('requiredActions', 'N/A')
             
             # Set default row height (15 is Excel's default)
             ws.row_dimensions[row_num].height = 15

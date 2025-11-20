@@ -577,3 +577,24 @@ resource "aws_iam_role_policy" "account_email_sender_sqs" {
     ]
   })
 }
+
+resource "aws_iam_role_policy" "account_email_sender_dynamodb" {
+  count = var.enable_email_notifications ? 1 : 0
+  
+  name = "${var.name_prefix}-account-email-sender-dynamodb"
+  role = aws_iam_role.account_email_sender_role[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:BatchGetItem",
+          "dynamodb:GetItem"
+        ]
+        Resource = var.events_table_arn
+      }
+    ]
+  })
+}

@@ -272,6 +272,7 @@ resource "aws_lambda_function" "account_email_sender" {
       PRESIGNED_URL_EXPIRATION          = "604800"  # 7 days
       EMAIL_ATTACHMENT_SIZE_THRESHOLD_MB = "5"
       LOG_LEVEL                         = "INFO"
+      DYNAMODB_HEALTH_EVENTS_TABLE_NAME = var.events_table_name
     }
   }
 
