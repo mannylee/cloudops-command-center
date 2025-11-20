@@ -168,8 +168,9 @@ data "archive_file" "python_deps_zip" {
 
 resource "null_resource" "build_layer" {
   provisioner "local-exec" {
-    command     = "./build.sh"
+    command     = substr(pathexpand("~"), 0, 1) == "/" ? "./build.sh" : "bash build.sh"
     working_dir = "${path.module}/layers/python-deps"
+    interpreter = substr(pathexpand("~"), 0, 1) == "/" ? ["/bin/sh", "-c"] : ["bash", "-c"]
   }
   
   triggers = {
@@ -200,8 +201,9 @@ resource "null_resource" "build_email_processor_layer" {
   count = var.enable_email_notifications ? 1 : 0
   
   provisioner "local-exec" {
-    command     = "./build.sh"
+    command     = substr(pathexpand("~"), 0, 1) == "/" ? "./build.sh" : "bash build.sh"
     working_dir = "${path.module}/layers/email-processor-deps"
+    interpreter = substr(pathexpand("~"), 0, 1) == "/" ? ["/bin/sh", "-c"] : ["bash", "-c"]
   }
   
   triggers = {

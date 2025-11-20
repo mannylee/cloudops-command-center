@@ -1,7 +1,9 @@
 # SSM Parameters for application configuration
 
-# API Gateway URL
+# API Gateway URL (only created if frontend is enabled)
 resource "aws_ssm_parameter" "api_gateway_url" {
+  count = var.api_gateway_url != "" ? 1 : 0
+  
   name  = "/${var.name_prefix}/api-gateway/url"
   type  = "String"
   value = var.api_gateway_url
@@ -10,8 +12,10 @@ resource "aws_ssm_parameter" "api_gateway_url" {
   tags        = var.common_tags
 }
 
-# Cognito User Pool ID
+# Cognito User Pool ID (only created if frontend is enabled)
 resource "aws_ssm_parameter" "cognito_user_pool_id" {
+  count = var.cognito_user_pool_id != "" ? 1 : 0
+  
   name  = "/${var.name_prefix}/cognito/user-pool-id"
   type  = "String"
   value = var.cognito_user_pool_id
@@ -20,8 +24,10 @@ resource "aws_ssm_parameter" "cognito_user_pool_id" {
   tags        = var.common_tags
 }
 
-# Cognito User Pool Client ID
+# Cognito User Pool Client ID (only created if frontend is enabled)
 resource "aws_ssm_parameter" "cognito_client_id" {
+  count = var.cognito_client_id != "" ? 1 : 0
+  
   name  = "/${var.name_prefix}/cognito/client-id"
   type  = "String"
   value = var.cognito_client_id
@@ -30,8 +36,10 @@ resource "aws_ssm_parameter" "cognito_client_id" {
   tags        = var.common_tags
 }
 
-# Cognito Domain URL
+# Cognito Domain URL (only created if frontend is enabled)
 resource "aws_ssm_parameter" "cognito_domain_url" {
+  count = var.cognito_domain_url != "" ? 1 : 0
+  
   name  = "/${var.name_prefix}/cognito/domain-url"
   type  = "String"
   value = var.cognito_domain_url
