@@ -38,15 +38,15 @@ variable "project_name" {
 variable "naming_convention" {
   description = "Naming convention configuration"
   type = object({
-    prefix    = optional(string, "")
-    suffix    = optional(string, "")
-    separator = optional(string, "-")
+    prefix            = optional(string, "")
+    suffix            = optional(string, "")
+    separator         = optional(string, "-")
     use_random_suffix = optional(bool, false)
   })
   default = {
-    prefix    = ""
-    suffix    = ""
-    separator = "-"
+    prefix            = ""
+    suffix            = ""
+    separator         = "-"
     use_random_suffix = false
   }
 }
@@ -155,4 +155,16 @@ variable "account_email_cc" {
   description = "Optional CC email address for all account-specific emails (leave empty to disable)"
   type        = string
   default     = ""
+}
+
+variable "event_sync_schedule_expression" {
+  description = "EventBridge schedule expression for event sync (default: every 6 hours)"
+  type        = string
+  default     = "rate(6 hours)"
+}
+
+variable "event_sync_lookback_days" {
+  description = "Number of days to look back when syncing events"
+  type        = number
+  default     = 30
 }

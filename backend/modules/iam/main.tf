@@ -249,19 +249,19 @@ resource "aws_iam_role_policy" "event_processor_dynamodb" {
 locals {
   # Determine region prefix based on deployment region
   region_prefix = var.deployment_region == "ap-southeast-1" ? "apac" : "us"
-  
+
   # Define Bedrock model ARNs based on region
   bedrock_foundation_models = [
     "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-20250514-v1:0",
     "arn:aws:bedrock:*::foundation-model/anthropic.claude-3-7-sonnet-20250219-v1:0",
     "arn:aws:bedrock:*::foundation-model/anthropic.claude-3-5-sonnet-20240620-v1:0"
   ]
-  
+
   bedrock_inference_profiles = [
     "arn:aws:bedrock:*:*:inference-profile/${local.region_prefix}.anthropic.claude-sonnet-4-20250514-v1:0",
     "arn:aws:bedrock:*:*:inference-profile/${local.region_prefix}.anthropic.claude-3-7-sonnet-20250219-v1:0"
   ]
-  
+
   # Combine all Bedrock resources
   bedrock_resources = concat(local.bedrock_foundation_models, local.bedrock_inference_profiles)
 }
@@ -350,7 +350,7 @@ resource "aws_iam_role_policy" "event_processor_sqs" {
 # Email Processor Lambda role
 resource "aws_iam_role" "email_processor_role" {
   count = var.enable_email_notifications ? 1 : 0
-  
+
   name = "${var.name_prefix}-email-processor-role"
   tags = var.common_tags
 
@@ -370,14 +370,14 @@ resource "aws_iam_role" "email_processor_role" {
 
 resource "aws_iam_role_policy_attachment" "email_processor_basic" {
   count = var.enable_email_notifications ? 1 : 0
-  
+
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
   role       = aws_iam_role.email_processor_role[0].name
 }
 
 resource "aws_iam_role_policy" "email_processor_dynamodb" {
   count = var.enable_email_notifications ? 1 : 0
-  
+
   name = "${var.name_prefix}-email-processor-dynamodb"
   role = aws_iam_role.email_processor_role[0].id
 
@@ -403,7 +403,7 @@ resource "aws_iam_role_policy" "email_processor_dynamodb" {
 
 resource "aws_iam_role_policy" "email_processor_ses" {
   count = var.enable_email_notifications ? 1 : 0
-  
+
   name = "${var.name_prefix}-email-processor-ses"
   role = aws_iam_role.email_processor_role[0].id
 
@@ -424,7 +424,7 @@ resource "aws_iam_role_policy" "email_processor_ses" {
 
 resource "aws_iam_role_policy" "email_processor_s3" {
   count = var.enable_email_notifications ? 1 : 0
-  
+
   name = "${var.name_prefix}-email-processor-s3"
   role = aws_iam_role.email_processor_role[0].id
 
@@ -446,7 +446,7 @@ resource "aws_iam_role_policy" "email_processor_s3" {
 
 resource "aws_iam_role_policy" "email_processor_organizations" {
   count = var.enable_email_notifications ? 1 : 0
-  
+
   name = "${var.name_prefix}-email-processor-organizations"
   role = aws_iam_role.email_processor_role[0].id
 
@@ -467,7 +467,7 @@ resource "aws_iam_role_policy" "email_processor_organizations" {
 
 resource "aws_iam_role_policy" "email_processor_sqs" {
   count = var.enable_email_notifications ? 1 : 0
-  
+
   name = "${var.name_prefix}-email-processor-sqs"
   role = aws_iam_role.email_processor_role[0].id
 
@@ -488,7 +488,7 @@ resource "aws_iam_role_policy" "email_processor_sqs" {
 # Account Email Sender Lambda role
 resource "aws_iam_role" "account_email_sender_role" {
   count = var.enable_email_notifications ? 1 : 0
-  
+
   name = "${var.name_prefix}-account-email-sender-role"
   tags = var.common_tags
 
@@ -508,14 +508,14 @@ resource "aws_iam_role" "account_email_sender_role" {
 
 resource "aws_iam_role_policy_attachment" "account_email_sender_basic" {
   count = var.enable_email_notifications ? 1 : 0
-  
+
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
   role       = aws_iam_role.account_email_sender_role[0].name
 }
 
 resource "aws_iam_role_policy" "account_email_sender_ses" {
   count = var.enable_email_notifications ? 1 : 0
-  
+
   name = "${var.name_prefix}-account-email-sender-ses"
   role = aws_iam_role.account_email_sender_role[0].id
 
@@ -536,7 +536,7 @@ resource "aws_iam_role_policy" "account_email_sender_ses" {
 
 resource "aws_iam_role_policy" "account_email_sender_s3" {
   count = var.enable_email_notifications ? 1 : 0
-  
+
   name = "${var.name_prefix}-account-email-sender-s3"
   role = aws_iam_role.account_email_sender_role[0].id
 
@@ -557,7 +557,7 @@ resource "aws_iam_role_policy" "account_email_sender_s3" {
 
 resource "aws_iam_role_policy" "account_email_sender_sqs" {
   count = var.enable_email_notifications ? 1 : 0
-  
+
   name = "${var.name_prefix}-account-email-sender-sqs"
   role = aws_iam_role.account_email_sender_role[0].id
 
@@ -580,7 +580,7 @@ resource "aws_iam_role_policy" "account_email_sender_sqs" {
 
 resource "aws_iam_role_policy" "account_email_sender_dynamodb" {
   count = var.enable_email_notifications ? 1 : 0
-  
+
   name = "${var.name_prefix}-account-email-sender-dynamodb"
   role = aws_iam_role.account_email_sender_role[0].id
 

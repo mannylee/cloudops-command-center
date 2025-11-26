@@ -42,8 +42,8 @@ output "function_names" {
   description = "All Lambda function names"
   value = {
     dashboard       = aws_lambda_function.dashboard.function_name
-    events         = aws_lambda_function.events.function_name
-    filters        = aws_lambda_function.filters.function_name
+    events          = aws_lambda_function.events.function_name
+    filters         = aws_lambda_function.filters.function_name
     event_processor = aws_lambda_function.event_processor.function_name
   }
 }

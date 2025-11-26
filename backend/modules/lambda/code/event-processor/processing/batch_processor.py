@@ -88,13 +88,16 @@ def process_single_event_mode(event, health_client, bedrock_client):
                     logging.info(
                         "Found event in list, updating synthetic event with real data"
                     )
+                    # Handle region - use "global" for events without a specific region
+                    event_region = evt.get("region", "")
+                    if not event_region or event_region == "":
+                        event_region = "global"
+                    
                     synthetic_event.update(
                         {
                             "eventTypeCode": evt.get("eventTypeCode", event_type_code),
                             "eventTypeCategory": evt.get("eventTypeCategory", "issue"),
-                            "region": evt.get(
-                                "region", os.environ.get("AWS_REGION", "us-east-1")
-                            ),
+                            "region": event_region,
                             "startTime": evt.get(
                                 "startTime", synthetic_event["startTime"]
                             ),
@@ -213,7 +216,7 @@ def process_single_event_mode(event, health_client, bedrock_client):
         }
 
 
-def process_batch_events(health_client, bedrock_client, sqs_client, context):
+def process_batch_events(health_client, bedrock_client, sqs_client, context, lookback_days=None):
     """
     Process batch of health events
 
@@ -222,6 +225,7 @@ def process_batch_events(health_client, bedrock_client, sqs_client, context):
         bedrock_client: Bedrock client
         sqs_client: SQS client
         context: Lambda context
+        lookback_days: Optional override for analysis window (used by scheduled sync)
 
     Returns:
         dict: Processing result
@@ -229,13 +233,16 @@ def process_batch_events(health_client, bedrock_client, sqs_client, context):
     logging.info("Starting batch event processing")
 
     # Get configuration from environment
-    analysis_window_days = int(os.environ["ANALYSIS_WINDOW_DAYS"])
+    analysis_window_days = lookback_days if lookback_days is not None else int(os.environ["ANALYSIS_WINDOW_DAYS"])
     excluded_services = os.environ.get("EXCLUDED_SERVICES", "").split(",")
     excluded_services = [s.strip() for s in excluded_services if s.strip()]
 
     logging.info(
         f"Configuration: analysis_window_days={analysis_window_days}, excluded_services={len(excluded_services)}"
     )
+    
+    if lookback_days is not None:
+        logging.info(f"Using scheduled sync mode with {lookback_days} days lookback")
 
     # Get event categories to process from environment variable
     event_categories_to_process = []
@@ -648,6 +655,11 @@ def process_synchronously(
                 account_impact = categories.get("account_impact", "low")
                 event_categories[f"{account_impact}_impact"] += 1
 
+                # Handle region - use "global" for events without a specific region
+                item_region = item.get("region", "")
+                if not item_region or item_region == "":
+                    item_region = "global"
+                
                 # Create structured event data with both raw data and analysis
                 event_entry = {
                     "arn": item.get("arn", "N/A"),
@@ -655,7 +667,7 @@ def process_synchronously(
                     "event_type": item.get("eventTypeCode", "N/A"),
                     "service": item.get("service", "N/A"),
                     "description": actual_description,
-                    "region": item.get("region", "N/A"),
+                    "region": item_region,
                     "start_time": format_time(item.get("startTime", "N/A")),
                     "last_update_time": format_time(item.get("lastUpdatedTime", "N/A")),
                     "status_code": item.get("statusCode", "unknown"),

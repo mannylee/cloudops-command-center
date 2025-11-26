@@ -18,15 +18,15 @@ variable "aws_profile" {
 variable "naming_convention" {
   description = "Naming convention configuration"
   type = object({
-    prefix    = optional(string, "")
-    suffix    = optional(string, "")
-    separator = optional(string, "-")
+    prefix            = optional(string, "")
+    suffix            = optional(string, "")
+    separator         = optional(string, "-")
     use_random_suffix = optional(bool, false)
   })
   default = {
-    prefix    = ""
-    suffix    = ""
-    separator = "-"
+    prefix            = ""
+    suffix            = ""
+    separator         = "-"
     use_random_suffix = false
   }
 }

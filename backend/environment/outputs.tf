@@ -26,13 +26,13 @@ output "dynamodb_table_names" {
 output "cognito_config" {
   description = "Cognito configuration for React app"
   value = length(module.cognito) > 0 ? {
-    user_pool_id     = module.cognito[0].user_pool_id
-    client_id        = module.cognito[0].user_pool_client_id
-    domain_url       = module.cognito[0].cognito_domain_url
-  } : {
-    user_pool_id     = ""
-    client_id        = ""
-    domain_url       = ""
+    user_pool_id = module.cognito[0].user_pool_id
+    client_id    = module.cognito[0].user_pool_client_id
+    domain_url   = module.cognito[0].cognito_domain_url
+    } : {
+    user_pool_id = ""
+    client_id    = ""
+    domain_url   = ""
   }
 }
 
@@ -44,9 +44,9 @@ output "health_monitoring_regions" {
 output "frontend_config" {
   description = "Frontend hosting configuration"
   value = {
-    s3_bucket_name           = module.frontend.s3_bucket_name
+    s3_bucket_name             = module.frontend.s3_bucket_name
     cloudfront_distribution_id = module.frontend.cloudfront_distribution_id
-    cloudfront_url           = module.frontend.cloudfront_url
+    cloudfront_url             = module.frontend.cloudfront_url
   }
 }
 

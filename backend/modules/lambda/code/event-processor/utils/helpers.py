@@ -5,7 +5,7 @@ def format_time(time_str):
     Format time string to be consistent
     
     Args:
-        time_str (str): ISO format time string
+        time_str (str): ISO format or RFC 2822 format time string
         
     Returns:
         str: Formatted time string (YYYY-MM-DD)
@@ -17,6 +17,15 @@ def format_time(time_str):
         # If it's already a datetime object
         if isinstance(time_str, datetime):
             return time_str.strftime('%Y-%m-%d')
+        
+        # Try RFC 2822 format first (e.g., "Mon, 15 Dec 2025 07:00:00 GMT")
+        if "GMT" in time_str or "," in time_str:
+            from email.utils import parsedate_to_datetime
+            dt = parsedate_to_datetime(time_str)
+            # Convert to UTC and make naive
+            if dt.tzinfo is not None:
+                dt = dt.replace(tzinfo=None)
+            return dt.strftime('%Y-%m-%d')
         
         # Parse ISO format
         dt = datetime.fromisoformat(time_str.replace('Z', '+00:00'))

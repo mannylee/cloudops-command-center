@@ -21,11 +21,11 @@ provider "aws" {
 # Naming convention locals (same as main infrastructure)
 locals {
   # Base naming components
-  base_name = var.project_name
-  prefix    = var.naming_convention.prefix != "" ? "${var.naming_convention.prefix}${var.naming_convention.separator}" : ""
-  suffix    = var.naming_convention.suffix != "" ? "${var.naming_convention.separator}${var.naming_convention.suffix}" : ""
+  base_name     = var.project_name
+  prefix        = var.naming_convention.prefix != "" ? "${var.naming_convention.prefix}${var.naming_convention.separator}" : ""
+  suffix        = var.naming_convention.suffix != "" ? "${var.naming_convention.separator}${var.naming_convention.suffix}" : ""
   random_suffix = var.naming_convention.use_random_suffix ? "${var.naming_convention.separator}${random_id.naming_suffix[0].hex}" : ""
-  
+
   # Final naming pattern for backend resources
   backend_name_prefix = "${local.prefix}${local.base_name}${local.suffix}${local.random_suffix}-backend"
 }
@@ -74,9 +74,9 @@ resource "aws_s3_bucket_public_access_block" "terraform_state" {
 
 # DynamoDB table for state locking
 resource "aws_dynamodb_table" "terraform_locks" {
-  name           = "${local.backend_name_prefix}-terraform-locks-${random_id.bucket_suffix.hex}"
-  billing_mode   = "PAY_PER_REQUEST"
-  hash_key       = "LockID"
+  name         = "${local.backend_name_prefix}-terraform-locks-${random_id.bucket_suffix.hex}"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "LockID"
 
   attribute {
     name = "LockID"

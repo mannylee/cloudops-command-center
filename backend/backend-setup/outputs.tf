@@ -15,7 +15,7 @@ output "random_suffix" {
 
 output "backend_config" {
   description = "Backend configuration to add to your main Terraform files"
-  value = <<EOF
+  value       = <<EOF
 terraform {
   backend "s3" {
     bucket         = "${aws_s3_bucket.terraform_state.bucket}"

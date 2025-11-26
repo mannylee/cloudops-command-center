@@ -15,6 +15,20 @@ from utils.config import (
     BEDROCK_MAX_TOKENS,
 )
 
+# Default analysis values used when Bedrock fails or returns invalid data
+DEFAULT_ANALYSIS_VALUES = {
+    "critical": False,
+    "risk_level": "LOW",
+    "account_impact": "LOW",
+    "time_sensitivity": "Routine",
+    "risk_category": "Unknown",
+    "required_actions": "Review event details manually",
+    "impact_analysis": "Unable to automatically analyze this event",
+    "consequences_if_ignored": "Unknown",
+    "affected_resources": "Unknown",
+    "event_impact_type": "Informational",
+}
+
 
 def invoke_bedrock_with_advanced_retry(bedrock_client, payload, model_id):
     """
@@ -194,6 +208,13 @@ def analyze_event_with_bedrock(bedrock_client, event_data):
 
         # Use description for analysis
         description = event_data.get("description", "No description available")
+        
+        # Truncate extremely long descriptions to prevent token exhaustion
+        # Keep first 3000 chars and add note if truncated
+        max_description_length = 3000
+        if len(description) > max_description_length:
+            description = description[:max_description_length] + "\n\n[Description truncated for analysis - full details available in event]"
+            logging.info(f"Truncated long description from {len(event_data.get('description', ''))} to {max_description_length} characters")
 
         # Prepare prompt for Bedrock
 
@@ -222,7 +243,14 @@ def analyze_event_with_bedrock(bedrock_client, event_data):
         - Any event that requires immediate action to prevent outage should be marked as URGENT time sensitivity
         - Events with high impact but no immediate downtime should be marked as HIGH risk level
     
-        Please analyze this event and provide the following information in JSON format:
+        CRITICAL OUTPUT REQUIREMENTS:
+        - Return ONLY valid JSON - no explanatory text, no markdown formatting, no preamble
+        - Do not wrap the JSON in ```json``` code blocks
+        - Do not include any text before or after the JSON object
+        - Ensure all string values use proper escape sequences for special characters
+        - Your entire response must be parseable by json.loads()
+        
+        Provide your analysis in this exact JSON format:
         {{
           "critical": boolean,
           "risk_level": "critical|high|medium|low",
@@ -321,21 +349,41 @@ def analyze_event_with_bedrock(bedrock_client, event_data):
         # Store the full analysis text as a string
         event_data["analysis_text"] = response_text
 
-        # Try to extract JSON from the response
-        json_match = re.search(r"```json\s*(.*?)\s*```", response_text, re.DOTALL)
+        # Extract JSON from response (handle various formats for backward compatibility)
+        # With updated prompt, response should be pure JSON, but keep fallbacks for robustness
+        json_str = response_text.strip()
+        
+        # Check for markdown code blocks (legacy format)
+        json_match = re.search(r"```json\s*(.*?)\s*```", json_str, re.DOTALL)
         if json_match:
-            json_str = json_match.group(1)
-        else:
-            json_match = re.search(r"({.*})", response_text, re.DOTALL)
+            json_str = json_match.group(1).strip()
+        # Check for JSON object within text (legacy format)
+        elif not json_str.startswith('{'):
+            json_match = re.search(r"({.*})", json_str, re.DOTALL)
             if json_match:
-                json_str = json_match.group(1)
-            else:
-                json_str = response_text
-
-        # Parse the JSON
+                json_str = json_match.group(1).strip()
+        
+        # Parse JSON with progressive fallback strategy
         try:
+            # Primary: Parse as-is (should work with updated prompt)
             analysis = json.loads(json_str)
-            # Normalize risk level to ensure consistency
+        except json.JSONDecodeError:
+            # Fallback 1: Try lenient parsing for minor formatting issues
+            try:
+                analysis = json.loads(json_str, strict=False)
+            except json.JSONDecodeError:
+                # Fallback 2: Fix unescaped control characters in string values
+                def escape_control_chars(match):
+                    content = match.group(1)
+                    content = content.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
+                    return f'"{content}"'
+                
+                json_str = re.sub(r'"([^"]*)"', escape_control_chars, json_str)
+                analysis = json.loads(json_str)
+
+        # At this point, analysis is already parsed from the try blocks above
+        # Normalize risk level to ensure consistency
+        try:
             if "risk_level" in analysis:
                 risk_level = analysis["risk_level"].strip().upper()
 
@@ -362,25 +410,52 @@ def analyze_event_with_bedrock(bedrock_client, event_data):
             event_data.update(analysis)
 
             return event_data
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, NameError) as e:
             logging.warning(
-                f"Failed to parse JSON from response: {response_text[:200]}..."
+                f"Failed to parse JSON from response: {response_text[:500]}..."
             )
-            # Provide default values if parsing fails
-            event_data.update(
-                {
-                    "critical": False,
-                    "risk_level": "LOW",
-                    "account_impact": "LOW",
-                    "time_sensitivity": "Routine",
-                    "risk_category": "Unknown",
-                    "required_actions": "Review event details manually",
-                    "impact_analysis": "Unable to automatically analyze this event",
-                    "consequences_if_ignored": "Unknown",
-                    "affected_resources": "Unknown",
-                    "event_impact_type": "Informational",
-                }
-            )
+            logging.warning(f"Parse error: {str(e)}")
+            
+            # Try to salvage partial JSON by attempting to fix common truncation issues
+            try:
+                # Attempt to close incomplete JSON structures
+                fixed_json_str = json_str.strip()
+                
+                # Count braces to see if we need to close the object
+                open_braces = fixed_json_str.count('{')
+                close_braces = fixed_json_str.count('}')
+                
+                if open_braces > close_braces:
+                    # Try to close incomplete string values first
+                    if fixed_json_str.rstrip().endswith(',') or not fixed_json_str.rstrip().endswith('"'):
+                        # Remove trailing comma if present
+                        fixed_json_str = fixed_json_str.rstrip().rstrip(',')
+                        # Close any open string
+                        if fixed_json_str.count('"') % 2 != 0:
+                            fixed_json_str += '"'
+                    
+                    # Add missing closing braces
+                    fixed_json_str += '}' * (open_braces - close_braces)
+                    
+                    logging.info(f"Attempting to parse fixed JSON with {open_braces - close_braces} added closing braces")
+                    analysis = json.loads(fixed_json_str)
+                    
+                    # Fill in any missing required fields with defaults from DEFAULT_ANALYSIS_VALUES
+                    for field, default_value in DEFAULT_ANALYSIS_VALUES.items():
+                        if field not in analysis or not analysis[field]:
+                            analysis[field] = default_value
+                            logging.info(f"Added missing field '{field}' with default value")
+                    
+                    # Update event data with salvaged analysis
+                    event_data.update(analysis)
+                    logging.info("Successfully salvaged partial JSON response")
+                    return event_data
+                    
+            except Exception as salvage_error:
+                logging.warning(f"Failed to salvage partial JSON: {str(salvage_error)}")
+            
+            # If salvage fails, provide default values
+            event_data.update(DEFAULT_ANALYSIS_VALUES)
             return event_data
 
     except Exception as e:
@@ -388,45 +463,8 @@ def analyze_event_with_bedrock(bedrock_client, event_data):
         logging.error(f"{traceback.format_exc()}")
 
         # Provide default values if Bedrock analysis fails
-        event_data.update(
-            {
-                "critical": False,
-                "risk_level": "LOW",
-                "account_impact": "LOW",
-                "time_sensitivity": "Routine",
-                "risk_category": "Unknown",
-                "required_actions": "Review event details manually",
-                "impact_analysis": "Unable to automatically analyze this event",
-                "consequences_if_ignored": "Unknown",
-                "affected_resources": "Unknown",
-                "analysis_text": f"Error during analysis: {str(e)}",
-                "event_impact_type": "Informational",
-            }
-        )
-        return event_data
-
-    except Exception as e:
-        logging.error(
-            f"Unexpected error in analyze_event_with_bedrock: {str(e)}"
-        )
-        logging.error(f"{traceback.format_exc()}")
-
-        # Provide default values if function fails
-        event_data.update(
-            {
-                "critical": False,
-                "risk_level": "LOW",
-                "account_impact": "LOW",
-                "time_sensitivity": "Routine",
-                "risk_category": "Unknown",
-                "required_actions": "Review event details manually",
-                "impact_analysis": "Unable to automatically analyze this event",
-                "consequences_if_ignored": "Unknown",
-                "affected_resources": "Unknown",
-                "analysis_text": f"Error during analysis: {str(e)}",
-                "event_impact_type": "Informational",
-            }
-        )
+        event_data.update(DEFAULT_ANALYSIS_VALUES)
+        event_data["analysis_text"] = f"Error during analysis: {str(e)}"
         return event_data
 
 

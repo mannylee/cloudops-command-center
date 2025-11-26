@@ -2039,16 +2039,23 @@ case "$COMMAND" in
         setup_backend
         deploy_infrastructure
         print_success "Deployment complete!"
+        COMPLETION_TIME=$(date '+%Y-%m-%d %H:%M:%S')
+        print_success "Deployment completed at: $COMPLETION_TIME"
         ;;
     "destroy")
         print_status "Starting AWS Health Dashboard destruction..."
         setup_aws_profile
         destroy_infrastructure
+        print_success "Destruction complete!"
+        COMPLETION_TIME=$(date '+%Y-%m-%d %H:%M:%S')
+        print_success "Destruction completed at: $COMPLETION_TIME"
         ;;
     "configure")
         print_status "Starting AWS Health Dashboard configuration..."
         configure_deployment
         print_success "Configuration complete!"
+        COMPLETION_TIME=$(date '+%Y-%m-%d %H:%M:%S')
+        print_success "Configuration completed at: $COMPLETION_TIME"
         ;;
     *)
         print_error "Unknown command: $COMMAND"

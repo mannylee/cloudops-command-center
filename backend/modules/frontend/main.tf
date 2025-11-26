@@ -44,7 +44,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "frontend" {
     }
 
     expiration {
-      days = 365  # 12 months
+      days = 365 # 12 months
     }
   }
 }
@@ -52,7 +52,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "frontend" {
 # CloudFront Origin Access Control (only if frontend is enabled)
 resource "aws_cloudfront_origin_access_control" "frontend" {
   count = var.build_and_upload ? 1 : 0
-  
+
   name                              = var.backend_random_suffix != "" ? "${var.name_prefix}-frontend-oac-${var.backend_random_suffix}" : "${var.name_prefix}-frontend-oac"
   description                       = "OAC for ${var.name_prefix} frontend"
   origin_access_control_origin_type = "s3"
@@ -63,7 +63,7 @@ resource "aws_cloudfront_origin_access_control" "frontend" {
 # CloudFront Distribution (only if frontend is enabled)
 resource "aws_cloudfront_distribution" "frontend" {
   count = var.build_and_upload ? 1 : 0
-  
+
   origin {
     domain_name              = aws_s3_bucket.frontend.bucket_regional_domain_name
     origin_access_control_id = aws_cloudfront_origin_access_control.frontend[0].id
@@ -150,7 +150,7 @@ resource "aws_s3_bucket_policy" "frontend" {
 # Generate aws-exports.json configuration
 resource "local_file" "aws_exports" {
   count = var.build_and_upload ? 1 : 0
-  
+
   filename = "${var.frontend_source_path}/public/aws-exports.json"
   content = jsonencode({
     region = var.aws_region

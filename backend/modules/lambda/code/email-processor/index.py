@@ -148,13 +148,14 @@ def fetch_open_health_events():
         
         # Scan for events with statusCode = 'open' or 'upcoming'
         response = table.scan(
-            FilterExpression='#status IN (:open, :upcoming)',
+            FilterExpression='#status IN (:open, :upcoming, :scheduled)',
             ExpressionAttributeNames={
                 '#status': 'statusCode'
             },
             ExpressionAttributeValues={
                 ':open': 'open',
-                ':upcoming': 'upcoming'
+                ':upcoming': 'upcoming',
+                ':scheduled': 'scheduled'
             }
         )
         
@@ -163,13 +164,14 @@ def fetch_open_health_events():
         # Handle pagination
         while 'LastEvaluatedKey' in response:
             response = table.scan(
-                FilterExpression='#status IN (:open, :upcoming)',
+                FilterExpression='#status IN (:open, :upcoming, :scheduled)',
                 ExpressionAttributeNames={
                     '#status': 'statusCode'
                 },
                 ExpressionAttributeValues={
                     ':open': 'open',
-                    ':upcoming': 'upcoming'
+                    ':upcoming': 'upcoming',
+                    ':scheduled': 'scheduled'
                 },
                 ExclusiveStartKey=response['LastEvaluatedKey']
             )

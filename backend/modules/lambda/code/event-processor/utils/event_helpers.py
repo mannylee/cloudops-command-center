@@ -101,13 +101,18 @@ def normalize_event_format(message_body):
         if account_id == "N/A":
             account_id = detail.get("affectedAccount", "N/A")
 
+        # Handle region - use "global" for events without a specific region
+        region = detail.get("region", "")
+        if not region or region == "":
+            region = "global"
+        
         normalized_event = {
             "arn": detail.get("eventArn", ""),
             "eventArn": detail.get("eventArn", ""),
             "eventTypeCode": detail.get("eventTypeCode", ""),
             "eventTypeCategory": detail.get("eventTypeCategory", ""),
             "service": detail.get("service", ""),
-            "region": detail.get("region", ""),
+            "region": region,
             "startTime": detail.get("startTime", ""),
             "lastUpdatedTime": detail.get("lastUpdatedTime", ""),
             "statusCode": detail.get("statusCode", ""),

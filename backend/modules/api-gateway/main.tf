@@ -6,13 +6,13 @@ resource "aws_api_gateway_rest_api" "health_dashboard" {
   name        = "${var.name_prefix}-api"
   description = "API for AWS Health Dashboard - Organization Summary"
   tags        = var.common_tags
-  
+
   body = templatefile("${path.module}/../../aws-health-dashboard-api.yaml", {
     dashboard_function_arn = "arn:aws:apigateway:${data.aws_region.current.name}:lambda:path/2015-03-31/functions/${var.dashboard_function_arn}/invocations"
     events_function_arn    = "arn:aws:apigateway:${data.aws_region.current.name}:lambda:path/2015-03-31/functions/${var.events_function_arn}/invocations"
     filters_function_arn   = "arn:aws:apigateway:${data.aws_region.current.name}:lambda:path/2015-03-31/functions/${var.filters_function_arn}/invocations"
     cognito_user_pool_arn  = var.cognito_user_pool_arn
-    name_prefix = var.name_prefix
+    name_prefix            = var.name_prefix
   })
 
   depends_on = [var.dashboard_function_arn, var.events_function_arn, var.filters_function_arn]
@@ -27,7 +27,7 @@ resource "aws_api_gateway_rest_api" "health_dashboard" {
 # API Gateway Deployment
 resource "aws_api_gateway_deployment" "health_dashboard" {
   depends_on = [aws_api_gateway_rest_api.health_dashboard]
-  
+
   rest_api_id = aws_api_gateway_rest_api.health_dashboard.id
 
   triggers = {

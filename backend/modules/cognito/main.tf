@@ -13,7 +13,7 @@ resource "aws_cognito_user_pool" "health_dashboard" {
 
   # User attributes
   username_attributes = ["email"]
-  
+
   auto_verified_attributes = ["email"]
 
   # Email configuration
@@ -45,13 +45,13 @@ resource "aws_cognito_user_pool_client" "react_app" {
   allowed_oauth_flows_user_pool_client = true
   allowed_oauth_flows                  = ["code"]
   allowed_oauth_scopes                 = ["email", "openid", "profile"]
-  
+
   # Callback URLs for React app
   callback_urls = [
     "http://localhost:3000/callback",
     "https://${var.domain_name}/callback"
   ]
-  
+
   logout_urls = [
     "http://localhost:3000",
     "https://${var.domain_name}"
@@ -59,7 +59,7 @@ resource "aws_cognito_user_pool_client" "react_app" {
 
   # Token validity
   access_token_validity  = 1  # 1 hour
-  id_token_validity     = 1  # 1 hour
+  id_token_validity      = 1  # 1 hour
   refresh_token_validity = 30 # 30 days
 
   # Prevent user existence errors

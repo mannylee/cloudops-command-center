@@ -221,6 +221,7 @@ def store_events_in_dynamodb(events_analysis):
             }
 
             # Convert any empty strings to None (null in DynamoDB)
+            # Keep "N/A" as a string value to avoid NULL in DynamoDB for optional fields
             for key, value in item.items():
                 if value == "":
                     item[key] = None
@@ -276,6 +277,76 @@ def process_single_event(bedrock_client, event_data):
         account_id = event_data.get("accountId", "N/A")
         account_name = get_account_name(account_id) if account_id != "N/A" else "N/A"
 
+        # Check if event already exists in DynamoDB with VALID analysis
+        event_arn = event_data.get("arn", "")
+        existing_event = None
+        skip_bedrock_analysis = False
+        
+        if event_arn and account_id != "N/A" and DYNAMODB_TABLE_NAME:
+            try:
+                dynamodb = boto3.resource("dynamodb")
+                table = dynamodb.Table(DYNAMODB_TABLE_NAME)
+                
+                response = table.get_item(
+                    Key={
+                        "eventArn": event_arn,
+                        "accountId": account_id
+                    }
+                )
+                
+                if "Item" in response:
+                    existing_event = response["Item"]
+                    
+                    # Check if event has VALID analysis
+                    # Run Bedrock analysis if:
+                    # 1. Failed analysis (specific fallback values)
+                    # 2. Missing/blank/null values in key fields
+                    
+                    # Import default values from bedrock_analyzer
+                    from analysis.bedrock_analyzer import DEFAULT_ANALYSIS_VALUES
+                    
+                    required_actions = existing_event.get("requiredActions", "")
+                    risk_category = existing_event.get("riskCategory", "")
+                    impact_analysis = existing_event.get("impactAnalysis", "")
+                    
+                    # Check for failed analysis (Bedrock couldn't analyze)
+                    # Compare against the default fallback values
+                    is_failed_analysis = (
+                        required_actions == DEFAULT_ANALYSIS_VALUES["required_actions"] and
+                        risk_category == DEFAULT_ANALYSIS_VALUES["risk_category"] and
+                        impact_analysis == DEFAULT_ANALYSIS_VALUES["impact_analysis"]
+                    )
+                    
+                    # Check for missing/blank/null values
+                    has_blank_or_null = (
+                        not required_actions or required_actions.strip() == "" or
+                        not risk_category or risk_category.strip() == "" or
+                        not impact_analysis or impact_analysis.strip() == ""
+                    )
+                    
+                    # Valid analysis = has all fields populated AND not failed analysis
+                    has_valid_analysis = (
+                        required_actions and required_actions.strip() and
+                        risk_category and risk_category.strip() and
+                        impact_analysis and impact_analysis.strip() and
+                        not is_failed_analysis
+                    )
+                    
+                    if has_valid_analysis:
+                        skip_bedrock_analysis = True
+                        logging.info(f"Event {event_arn} has valid analysis, skipping Bedrock re-analysis")
+                    elif is_failed_analysis:
+                        logging.info(f"Event {event_arn} has failed analysis (fallback values), will retry with Bedrock")
+                    elif has_blank_or_null:
+                        logging.info(f"Event {event_arn} has blank/null analysis fields, will analyze with Bedrock")
+                    else:
+                        logging.info(f"Event {event_arn} exists but incomplete analysis, will analyze")
+                else:
+                    logging.info(f"Event {event_arn} is new, will analyze")
+                    
+            except Exception as e:
+                logging.warning(f"Error checking for existing event: {str(e)}, will proceed with analysis")
+
         # Fetch additional details from Health API if needed
         if account_id != "N/A":
             health_data = fetch_health_event_details_for_org(
@@ -302,17 +373,41 @@ def process_single_event(bedrock_client, event_data):
         if not event_data.get("description"):
             event_data["description"] = "No description available"
 
-        # Analyze the event with Bedrock
-        analysis = analyze_event_with_bedrock(bedrock_client, event_data)
-
-        # Categorize the analysis
-        categories = categorize_analysis(analysis)
+        # Analyze the event with Bedrock (or reuse existing valid analysis)
+        if skip_bedrock_analysis and existing_event:
+            # Reuse existing valid analysis
+            logging.info("Reusing existing valid Bedrock analysis")
+            analysis = existing_event.get("analysisText", "")
+            categories = {
+                "critical": existing_event.get("critical", False),
+                "risk_level": existing_event.get("riskLevel", "LOW"),
+                "impact_analysis": existing_event.get("impactAnalysis", ""),
+                "required_actions": existing_event.get("requiredActions", ""),
+                "time_sensitivity": existing_event.get("timeSensitivity", "Routine"),
+                "risk_category": existing_event.get("riskCategory", "Unknown"),
+                "consequences_if_ignored": existing_event.get("consequencesIfIgnored", ""),
+                "event_impact_type": existing_event.get("eventImpactType", "Unknown"),
+            }
+        else:
+            # Perform new Bedrock analysis (for new events or failed analyses)
+            if existing_event:
+                logging.info("Performing new Bedrock analysis to fix failed analysis")
+            else:
+                logging.info("Performing Bedrock analysis for new event")
+            analysis = analyze_event_with_bedrock(bedrock_client, event_data)
+            # Categorize the analysis
+            categories = categorize_analysis(analysis)
 
         # Generate simplified description
         simplified_description = generate_simplified_description(
             event_data.get("service", "N/A"), event_data.get("eventTypeCode", "N/A")
         )
 
+        # Handle region - use "global" for events without a specific region
+        event_region = event_data.get("region", "")
+        if not event_region or event_region == "":
+            event_region = "global"
+        
         # Create structured event data
         event_entry = {
             "arn": event_data.get("arn", "N/A"),
@@ -320,7 +415,7 @@ def process_single_event(bedrock_client, event_data):
             "event_type": event_data.get("eventTypeCode", "N/A"),
             "description": event_data.get("description", "N/A"),
             "simplified_description": simplified_description,
-            "region": event_data.get("region", "N/A"),
+            "region": event_region,
             "start_time": format_time(event_data.get("startTime", "N/A")),
             "last_update_time": format_time(event_data.get("lastUpdatedTime", "N/A")),
             "event_type_category": event_data.get("eventTypeCategory", "N/A"),

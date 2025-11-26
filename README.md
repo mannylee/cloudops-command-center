@@ -241,6 +241,152 @@ To override the default AWS Organizations email routing:
 
 Emails are sent daily at 8:00 AM UTC via EventBridge schedule. Only accounts with open health events receive emails.
 
+## Event Processor Lambda Modes
+
+The Event Processor Lambda function operates in multiple modes depending on how it's triggered. Understanding these modes helps with troubleshooting and manual operations.
+
+### 1. SQS Event Processing (Real-Time)
+
+**Trigger:** EventBridge → SQS Queue → Lambda
+
+**Purpose:** Process individual health events as they occur in real-time
+
+**Event Format:**
+```json
+{
+  "Records": [{
+    "eventSource": "aws:sqs",
+    "body": "{...health event data...}"
+  }]
+}
+```
+
+**Behavior:**
+- Processes events one at a time from SQS queue
+- Analyzes with Bedrock if event is new or has incomplete analysis
+- Updates DynamoDB with event details and analysis
+- Updates live counts table
+- Handles EventBridge event format conversion
+
+**When it runs:** Automatically when AWS Health events occur
+
+### 2. DynamoDB Stream Processing (TTL Cleanup)
+
+**Trigger:** DynamoDB TTL deletion → DynamoDB Stream → Lambda
+
+**Purpose:** Decrement counts when events expire via TTL
+
+**Event Format:**
+```json
+{
+  "Records": [{
+    "eventSource": "aws:dynamodb",
+    "eventName": "REMOVE",
+    "userIdentity": {"type": "Service", "principalId": "dynamodb.amazonaws.com"}
+  }]
+}
+```
+
+**Behavior:**
+- Detects TTL-deleted events
+- Decrements live counts for affected accounts
+- Only processes events that were contributing to counts (open/upcoming/scheduled status)
+
+**When it runs:** Automatically when DynamoDB TTL expires events
+
+### 3. Scheduled Sync Mode (Daily)
+
+**Trigger:** EventBridge Scheduled Rule → Lambda
+
+**Purpose:** Catch status changes that didn't trigger EventBridge notifications
+
+**Event Format:**
+```json
+{
+  "mode": "scheduled_sync",
+  "lookback_days": 7
+}
+```
+
+**Behavior:**
+- Fetches all events from AWS Health API for last 7 days (configurable)
+- Compares with DynamoDB to detect status changes
+- Updates events that changed status (e.g., upcoming → closed)
+- Skips Bedrock analysis for events with valid existing analysis
+- Re-analyzes events with failed or incomplete analysis
+
+**When it runs:** Daily at 2 AM Singapore time (6 PM UTC)
+
+**Why needed:** AWS Health doesn't send EventBridge notifications for all status changes (e.g., routine event closures)
+
+### 4. Batch Processing Mode (Manual)
+
+**Trigger:** Manual Lambda invocation or initial deployment
+
+**Purpose:** Bulk process events for a time range
+
+**Event Format:**
+```json
+{
+  "start_time": "2025-01-01T00:00:00Z",
+  "end_time": "2025-01-31T23:59:59Z"
+}
+```
+
+**Behavior:**
+- Fetches all events from AWS Health API for specified time range
+- Processes events in bulk
+- Analyzes with Bedrock (respects existing valid analysis)
+- Useful for initial data population or backfilling
+
+**When it runs:** Manually invoked or during initial deployment
+
+### 5. Single Event Mode (Manual)
+
+**Trigger:** Manual Lambda invocation with specific event ARN
+
+**Purpose:** Process or re-analyze a specific event
+
+**Event Format:**
+```json
+{
+  "event_arn": "arn:aws:health:us-east-1::event/EC2/AWS_EC2_INSTANCE_RETIREMENT/..."
+}
+```
+
+**Behavior:**
+- Fetches details for specific event ARN
+- Forces Bedrock analysis (even if event exists)
+- Useful for troubleshooting or re-analyzing specific events
+
+**When it runs:** Manually invoked for debugging/testing
+
+### Manual Invocation Examples
+
+**Trigger scheduled sync manually:**
+```bash
+aws lambda invoke \
+  --function-name health-dashboard-dev-<random>-event-processor \
+  --payload '{"mode":"scheduled_sync","lookback_days":7}' \
+  response.json
+```
+
+**Re-analyze specific event:**
+```bash
+aws lambda invoke \
+  --function-name health-dashboard-dev-<random>-event-processor \
+  --payload '{"event_arn":"arn:aws:health:..."}' \
+  response.json
+```
+
+**Batch process date range:**
+```bash
+aws lambda invoke \
+  --function-name health-dashboard-dev-<random>-event-processor \
+  --payload '{"start_time":"2025-01-01T00:00:00Z","end_time":"2025-01-31T23:59:59Z"}' \
+  response.json
+```
+
 ## Why Use Remote State?
 
 ✅ **Team Collaboration** - Multiple developers can work safely

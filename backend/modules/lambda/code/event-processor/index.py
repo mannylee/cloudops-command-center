@@ -55,15 +55,24 @@ def handler(event, context):
             return process_sqs_event(event, context)
 
         else:
-            # Batch processing or single event mode
-            logger.info("Detected batch/single event processing")
+            # Batch processing, scheduled sync, or single event mode
+            logger.info("Detected batch/single event/scheduled sync processing")
 
             # Initialize clients
             logger.debug("Initializing AWS clients")
             health_client, bedrock_client, sqs_client = get_clients()
 
+            # Check if we're in scheduled sync mode
+            if isinstance(event, dict) and event.get("mode") == "scheduled_sync":
+                logger.info("Scheduled sync mode triggered")
+                lookback_days = event.get("lookback_days", 30)
+                logger.info(f"Syncing events from last {lookback_days} days")
+                return process_batch_events(
+                    health_client, bedrock_client, sqs_client, context,
+                    lookback_days=lookback_days
+                )
             # Check if we're in single event processing mode
-            if isinstance(event, dict) and "event_arn" in event and DYNAMODB_TABLE_NAME:
+            elif isinstance(event, dict) and "event_arn" in event and DYNAMODB_TABLE_NAME:
                 logger.info(
                     f"Single event processing mode for ARN: {event.get('event_arn')}"
                 )

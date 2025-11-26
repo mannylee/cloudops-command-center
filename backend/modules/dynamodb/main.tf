@@ -1,8 +1,8 @@
 # DynamoDB table for filters
 resource "aws_dynamodb_table" "filters" {
-  name           = "${var.name_prefix}-filters"
-  billing_mode   = "PAY_PER_REQUEST"
-  hash_key       = "filterId"
+  name         = "${var.name_prefix}-filters"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "filterId"
 
   attribute {
     name = "filterId"
@@ -17,10 +17,10 @@ resource "aws_dynamodb_table" "filters" {
 
 # DynamoDB table for PHD events
 resource "aws_dynamodb_table" "events" {
-  name           = "${var.name_prefix}-events"
-  billing_mode   = "PAY_PER_REQUEST"
-  hash_key       = "eventArn"
-  range_key      = "accountId"
+  name         = "${var.name_prefix}-events"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "eventArn"
+  range_key    = "accountId"
 
   attribute {
     name = "eventArn"
@@ -68,9 +68,9 @@ resource "aws_dynamodb_table" "events" {
 
 # DynamoDB table for count tracking
 resource "aws_dynamodb_table" "counts" {
-  name           = "${var.name_prefix}-counts"
-  billing_mode   = "PAY_PER_REQUEST"
-  hash_key       = "accountId"
+  name         = "${var.name_prefix}-counts"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "accountId"
   # Removed range_key to simplify the table structure for live counts
 
   attribute {
@@ -86,10 +86,10 @@ resource "aws_dynamodb_table" "counts" {
 
 # DynamoDB table for account email mappings
 resource "aws_dynamodb_table" "account_email_mappings" {
-  count          = var.create_account_mappings_table ? 1 : 0
-  name           = "${var.name_prefix}-account-email-mappings"
-  billing_mode   = "PAY_PER_REQUEST"
-  hash_key       = "accountId"
+  count        = var.create_account_mappings_table ? 1 : 0
+  name         = "${var.name_prefix}-account-email-mappings"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "accountId"
 
   attribute {
     name = "accountId"

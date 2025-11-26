@@ -22,7 +22,7 @@ resource "aws_cloudwatch_event_rule" "health_events" {
   description = "Capture AWS Health events"
 
   event_pattern = jsonencode({
-    source      = ["aws.health"]
+    source = ["aws.health"]
     detail-type = [
       "AWS Health Event",
       "AWS Health Abuse Event"
@@ -49,7 +49,7 @@ resource "aws_cloudwatch_event_target" "eventbridge_target" {
   rule      = aws_cloudwatch_event_rule.health_events.name
   target_id = "ForwardToDeploymentRegion"
   arn       = "arn:aws:events:${var.deployment_region}:${var.account_id}:event-bus/default"
-  
+
   role_arn = var.eventbridge_role_arn
 
   # Ensure this target is destroyed before the rule
