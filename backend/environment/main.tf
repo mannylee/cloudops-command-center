@@ -138,12 +138,16 @@ locals {
   # Final naming pattern
   name_prefix = "${local.prefix}${local.base_name}${local.suffix}${local.random_suffix}"
 
-  # Common tags
+  # Common tags to be applied to all resources
   common_tags = {
-    Project     = var.project_name
-    Environment = var.environment
-    ManagedBy   = "terraform"
-    auto-delete = "no"
+    Project            = "AWS CloudOps Command Center"
+    Environment        = var.environment
+    ManagedBy          = "Terraform"
+    Repository         = "cloudops-command-center"
+    Owner              = var.sender_email != "" ? var.sender_email : "unspecified"
+    DeployedAt         = timestamp()
+    DataClassification = "Internal"
+    auto-delete        = "no"
   }
 }
 

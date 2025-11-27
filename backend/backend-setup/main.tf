@@ -13,7 +13,12 @@ provider "aws" {
 
   default_tags {
     tags = {
-      "auto-delete" = "no"
+      Project            = "AWS CloudOps Command Center"
+      ManagedBy          = "Terraform"
+      Repository         = "cloudops-command-center"
+      Component          = "Backend"
+      DataClassification = "Internal"
+      "auto-delete"      = "no"
     }
   }
 }
@@ -84,6 +89,7 @@ resource "aws_dynamodb_table" "terraform_locks" {
   }
 
   tags = {
+    Name          = "${local.backend_name_prefix}-terraform-locks"
     "auto-delete" = "no"
   }
 }

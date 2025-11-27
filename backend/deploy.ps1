@@ -2151,8 +2151,8 @@ if ($Help) {
     exit 0
 }
 
-$script:RedeployMode = $Redeploy
-$script:SkipBedrockValidation = $SkipBedrockValidation
+$script:RedeployMode = $Redeploy.IsPresent
+$script:SkipBedrockValidation = $SkipBedrockValidation.IsPresent
 
 # Main script logic
 switch ($Command.ToLower()) {
@@ -2186,18 +2186,25 @@ switch ($Command.ToLower()) {
         Setup-Backend
         Deploy-Infrastructure
         Write-Success "Deployment complete!"
+        $completionTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        Write-Success "Deployment completed at: $completionTime"
     }
     
     "destroy" {
         Write-Status "Starting AWS Health Dashboard destruction..."
         Setup-AwsProfile
         Remove-Infrastructure
+        Write-Success "Destruction complete!"
+        $completionTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        Write-Success "Destruction completed at: $completionTime"
     }
     
     "configure" {
         Write-Status "Starting AWS Health Dashboard configuration..."
         Configure-Deployment
         Write-Success "Configuration complete!"
+        $completionTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        Write-Success "Configuration completed at: $completionTime"
     }
     
     default {
