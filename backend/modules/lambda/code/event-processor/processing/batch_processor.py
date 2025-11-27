@@ -13,6 +13,7 @@ from botocore.exceptions import ClientError
 from aws_clients.organizations_client import get_account_name
 from aws_clients.health_client import (
     fetch_health_event_details_for_org,
+    fetch_affected_accounts_for_event,
     is_org_view_enabled,
 )
 from storage.dynamodb_handler import (
@@ -22,13 +23,115 @@ from storage.dynamodb_handler import (
     initialize_live_counts,
 )
 from utils.helpers import format_time, extract_affected_resources
-from utils.event_helpers import expand_events_by_account
+from utils.event_helpers import expand_events_by_account, create_account_batches
 from analysis.bedrock_analyzer import analyze_event_with_bedrock, categorize_analysis
 from utils.sqs_helpers import send_events_to_sqs
 
 # Import environment variables
 DYNAMODB_TABLE_NAME = os.environ.get("DYNAMODB_HEALTH_EVENTS_TABLE_NAME")
 COUNTS_TABLE_NAME = os.environ.get("DYNAMODB_COUNTS_TABLE_NAME")
+
+
+def analyze_and_batch_event(event, bedrock_client):
+    """
+    Analyze event once and create account batches for parallel processing.
+    
+    This function implements the optimization to analyze each Health Event only once
+    using Bedrock, then create batches of affected accounts for parallel processing.
+    
+    Args:
+        event (dict): Health event with affectedAccounts array
+        bedrock_client: Bedrock client for analysis
+        
+    Returns:
+        list: Batch messages ready for SQS, each containing:
+            - event: Event metadata
+            - accounts: List of up to 10 account IDs
+            - analysis: Pre-computed Bedrock analysis text
+            - categories: Pre-computed analysis categories
+            - batchNumber: Current batch number (1-indexed)
+            - totalBatches: Total number of batches for this event
+    """
+    try:
+        # Get affected accounts
+        affected_accounts = event.get("affectedAccounts", [])
+        
+        if not affected_accounts:
+            logging.debug(f"Event {event.get('eventTypeCode', 'unknown')} has no affected accounts - skipping")
+            return []
+        
+        # Analyze event once using Bedrock
+        logging.info(f"Analyzing event {event.get('eventTypeCode', 'unknown')} with Bedrock (affects {len(affected_accounts)} accounts)")
+        
+        # Fetch full event description from Health API for Bedrock analysis
+        # Use the first affected account to get the description (description is same for all accounts)
+        description = "No description available"
+        event_arn = event.get("arn", "")
+        
+        if event_arn and affected_accounts:
+            try:
+                # Fetch event details using first account to get description
+                health_data = fetch_health_event_details_for_org(event_arn, affected_accounts[0])
+                description = (
+                    health_data.get("details", {})
+                    .get("eventDescription", {})
+                    .get("latestDescription", "No description available")
+                )
+                if description:
+                    logging.debug(f"Fetched description for event (length: {len(description)})")
+                else:
+                    description = "No description available"
+            except Exception as e:
+                logging.warning(f"Could not fetch description for event {event.get('eventTypeCode', 'unknown')}: {str(e)}")
+                description = "No description available"
+        
+        # Create event data structure for analysis
+        event_for_analysis = {
+            "eventTypeCode": event.get("eventTypeCode", "Unknown"),
+            "eventTypeCategory": event.get("eventTypeCategory", "Unknown"),
+            "region": event.get("region", "global"),
+            "startTime": event.get("startTime", ""),
+            "description": description,
+            "service": event.get("service", "Unknown"),
+        }
+        
+        # Perform Bedrock analysis once
+        analyzed_event = analyze_event_with_bedrock(bedrock_client, event_for_analysis)
+        analysis_text = analyzed_event.get("analysis_text", "")
+        
+        # Categorize the analysis
+        categories = categorize_analysis(analyzed_event)
+        
+        logging.info(f"Analysis complete for {event.get('eventTypeCode', 'unknown')}: risk_level={categories.get('risk_level', 'UNKNOWN')}, critical={categories.get('critical', False)}")
+        
+        # Create batches of accounts (default batch size: 10)
+        account_batches = create_account_batches(affected_accounts, batch_size=10)
+        
+        # Build SQS messages with embedded analysis (WITHOUT description to avoid size limits)
+        # Description will be fetched by SQS processor when storing to DynamoDB
+        batch_messages = []
+        for batch_num, account_batch in enumerate(account_batches):
+            message = {
+                "event": event,  # Event metadata (without description to save space)
+                "accounts": account_batch,  # Up to 10 accounts
+                "analysis": analysis_text,  # Pre-computed analysis
+                "categories": categories,  # Pre-computed categories
+                "batchNumber": batch_num + 1,  # 1-indexed
+                "totalBatches": len(account_batches)
+            }
+            batch_messages.append(message)
+        
+        logging.info(
+            f"Created {len(batch_messages)} batches for event {event.get('eventTypeCode', 'unknown')} "
+            f"({len(affected_accounts)} accounts)"
+        )
+        
+        return batch_messages
+        
+    except Exception as e:
+        logging.error(f"Error in analyze_and_batch_event: {str(e)}")
+        logging.error(f"{traceback.format_exc()}")
+        return []
 
 
 def process_single_event_mode(event, health_client, bedrock_client):
@@ -113,18 +216,13 @@ def process_single_event_mode(event, health_client, bedrock_client):
         logging.error(f"Error trying to get event from list: {str(e)}")
         logging.error(f"{traceback.format_exc()}")
 
-    # Try to get affected accounts
+    # Try to get affected accounts (with pagination support)
     affected_accounts = []
     try:
         if is_org_view_enabled():
-            logging.info("Attempting to get affected accounts")
-            accounts_response = (
-                health_client.describe_affected_accounts_for_organization(
-                    eventArn=single_event_arn
-                )
-            )
-            affected_accounts = accounts_response.get("affectedAccounts", [])
-            logging.info(f"Found affected accounts: {affected_accounts}")
+            logging.info("Attempting to get affected accounts with pagination")
+            affected_accounts = fetch_affected_accounts_for_event(single_event_arn)
+            logging.info(f"Found {len(affected_accounts)} affected accounts")
     except Exception as e:
         logging.error(f"Error getting affected accounts: {str(e)}")
 
@@ -343,13 +441,8 @@ def process_batch_events(health_client, bedrock_client, sqs_client, context, loo
         try:
             event_arn = event.get("arn", "")
             if event_arn:
-                # Fetch affected accounts for this event
-                accounts_response = (
-                    health_client.describe_affected_accounts_for_organization(
-                        eventArn=event_arn
-                    )
-                )
-                affected_accounts = accounts_response.get("affectedAccounts", [])
+                # Fetch affected accounts for this event (with pagination support)
+                affected_accounts = fetch_affected_accounts_for_event(event_arn)
                 event["affectedAccounts"] = affected_accounts
 
                 if affected_accounts:
@@ -386,7 +479,7 @@ def process_batch_events(health_client, bedrock_client, sqs_client, context, loo
             f"Large batch detected ({len(all_events_expanded)} events), using SQS for parallel processing..."
         )
         return process_with_sqs(
-            all_events_expanded, items_count, event_categories_to_process
+            all_events_with_accounts, bedrock_client, items_count, event_categories_to_process
         )
     else:
         # Synchronous processing mode (for small batches)
@@ -487,50 +580,70 @@ def fetch_organization_events(
     return all_events
 
 
-def process_with_sqs(all_events_expanded, items_count, event_categories_to_process):
+def process_with_sqs(all_events_with_accounts, bedrock_client, items_count, event_categories_to_process):
     """
-    Process events using SQS for parallel processing
+    Process events using SQS with optimized Bedrock analysis.
+    
+    This function implements the optimization where each event is analyzed once
+    with Bedrock, then batched by affected accounts for parallel processing.
+    
+    Args:
+        all_events_with_accounts: List of events with affectedAccounts arrays
+        bedrock_client: Bedrock client for analysis
+        items_count: Total number of unique events
+        event_categories_to_process: List of event categories to process
+        
+    Returns:
+        dict: Processing result with optimization metrics
     """
-    # Filter events by category before sending to SQS
-    events_to_process = []
+    all_batch_messages = []
+    bedrock_calls = 0
     filtered_count = 0
-
-    for item in all_events_expanded:
+    
+    # Process each event: analyze once and create account batches
+    for event in all_events_with_accounts:
         # Check if we should process this event category
-        event_type_category = item.get("eventTypeCategory", "")
-
+        event_type_category = event.get("eventTypeCategory", "")
+        
         if (
             event_categories_to_process
             and event_type_category not in event_categories_to_process
         ):
             logging.debug(
-                f"Skipping event {item.get('eventTypeCode', 'unknown')} with category {event_type_category} (not in configured categories)"
+                f"Skipping event {event.get('eventTypeCode', 'unknown')} with category {event_type_category} (not in configured categories)"
             )
             filtered_count += 1
             continue
-
-        # Skip events without valid account ID early
-        account_id = item.get("accountId", "N/A")
-        if account_id == "N/A" or not account_id:
+        
+        # Skip events without affected accounts
+        affected_accounts = event.get("affectedAccounts", [])
+        if not affected_accounts:
             logging.debug(
-                f"Skipping event {item.get('eventTypeCode', 'unknown')} - no valid account ID"
+                f"Skipping event {event.get('eventTypeCode', 'unknown')} - no affected accounts"
             )
             filtered_count += 1
             continue
-
+        
         # Ensure we have the event ARN and standardize field name
-        event_arn = item.get("arn", "")
+        event_arn = event.get("arn", "")
         if event_arn:
-            item["eventArn"] = event_arn
-
-        events_to_process.append(item)
-
+            event["eventArn"] = event_arn
+        
+        # Analyze event once and create batches
+        batch_messages = analyze_and_batch_event(event, bedrock_client)
+        
+        if batch_messages:
+            all_batch_messages.extend(batch_messages)
+            bedrock_calls += 1
+    
     logging.info(
-        f"Sending {len(events_to_process)} events to SQS for parallel processing (filtered out {filtered_count})"
+        f"Optimization: {bedrock_calls} Bedrock calls for "
+        f"{len(all_batch_messages)} batches "
+        f"(avoided {len(all_batch_messages) - bedrock_calls} duplicate calls)"
     )
-
-    # Send events to SQS for parallel processing
-    sqs_result = send_events_to_sqs(events_to_process)
+    
+    # Send all batches to SQS for parallel processing
+    sqs_result = send_events_to_sqs(all_batch_messages)
 
     if sqs_result.get("fallback", False):
         logging.warning("SQS not available, falling back to synchronous processing...")
@@ -540,18 +653,20 @@ def process_with_sqs(all_events_expanded, items_count, event_categories_to_proce
             "body": json.dumps({"error": "SQS fallback not implemented"}),
         }
     else:
-        # Return SQS batch processing result
+        # Return SQS batch processing result with optimization metrics
         return {
             "statusCode": 200,
             "body": json.dumps(
                 {
-                    "mode": "sqs_parallel_processing",
+                    "mode": "sqs_parallel_processing_optimized",
                     "total_events": items_count,
-                    "total_expanded_events": len(all_events_expanded),
-                    "events_sent_to_sqs": sqs_result["sent"],
-                    "events_failed_to_send": sqs_result["failed"],
+                    "bedrock_calls": bedrock_calls,
+                    "batches_created": len(all_batch_messages),
+                    "batches_sent_to_sqs": sqs_result["sent"],
+                    "batches_failed_to_send": sqs_result["failed"],
                     "filtered_events": filtered_count,
-                    "message": f"Sent {sqs_result['sent']} events to SQS for parallel processing",
+                    "optimization_savings": f"Avoided {len(all_batch_messages) - bedrock_calls} duplicate Bedrock calls",
+                    "message": f"Sent {sqs_result['sent']} batches to SQS for parallel processing (analyzed {bedrock_calls} unique events)",
                 }
             ),
         }

@@ -157,3 +157,31 @@ def expand_events_by_account(events):
         f"Expanded {len(events)} events to {len(expanded_events)} account-specific events"
     )
     return expanded_events
+
+
+def create_account_batches(affected_accounts, batch_size=10):
+    """
+    Split affected accounts into batches for parallel processing.
+    
+    Args:
+        affected_accounts (list): List of account IDs
+        batch_size (int): Maximum accounts per batch (default 10)
+        
+    Returns:
+        list: List of account batches, where each batch is a list of account IDs
+    """
+    if not affected_accounts:
+        return []
+    
+    batches = []
+    for i in range(0, len(affected_accounts), batch_size):
+        batch = affected_accounts[i:i + batch_size]
+        batches.append(batch)
+    
+    logging.info(
+        f"Created {len(batches)} batches from "
+        f"{len(affected_accounts)} accounts "
+        f"(batch size: {batch_size})"
+    )
+    
+    return batches

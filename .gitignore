@@ -54,6 +54,15 @@ build/
 *.log
 logs/
 
+# Testing
+.hypothesis/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+
 # Environment variables
 .env
 .env.local

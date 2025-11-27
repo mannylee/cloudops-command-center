@@ -97,46 +97,57 @@ def convert_to_dynamodb_format(row):
     # Get current timestamp for metadata
     analysis_timestamp = datetime.now(timezone.utc).isoformat()
     
+    # Helper function to clean CSV values (remove extra quotes)
+    def clean_value(value, default=""):
+        if not value:
+            return default
+        # Strip whitespace and remove surrounding quotes if present
+        cleaned = value.strip()
+        if cleaned.startswith('"') and cleaned.endswith('"'):
+            cleaned = cleaned[1:-1]
+        return cleaned if cleaned else default
+    
     # Calculate TTL
     ttl_timestamp = calculate_ttl_timestamp(row.get("lastUpdateTime", ""))
     
     # Generate simplified description
     simplified_description = generate_simplified_description(
-        row.get("service", "N/A"), 
-        row.get("eventType", "N/A")
+        clean_value(row.get("service", ""), "N/A"), 
+        clean_value(row.get("eventType", ""), "N/A")
     )
     
-    # Create DynamoDB item
+    # Create DynamoDB item with cleaned values
     item = {
-        "eventArn": row.get("eventArn", ""),
-        "accountId": row.get("accountId", ""),
-        "eventType": row.get("eventType", "N/A"),
-        "eventTypeCategory": row.get("eventTypeCategory", "N/A"),
-        "region": row.get("region", "N/A"),
-        "service": row.get("service", "N/A"),
-        "startTime": row.get("startTime", "N/A"),
-        "lastUpdateTime": row.get("lastUpdateTime", "N/A"),
-        "statusCode": row.get("statusCode", "unknown"),
-        "description": row.get("description", "N/A"),
+        "eventArn": clean_value(row.get("eventArn", "")),
+        "accountId": clean_value(row.get("accountId", "")),
+        "eventType": clean_value(row.get("eventType", ""), "N/A"),
+        "eventTypeCategory": clean_value(row.get("eventTypeCategory", ""), "N/A"),
+        "region": clean_value(row.get("region", ""), "N/A"),
+        "service": clean_value(row.get("service", ""), "N/A"),
+        "startTime": clean_value(row.get("startTime", ""), "N/A"),
+        "lastUpdateTime": clean_value(row.get("lastUpdateTime", ""), "N/A"),
+        "statusCode": clean_value(row.get("statusCode", ""), "unknown"),
+        "description": clean_value(row.get("description", ""), "N/A"),
         "simplifiedDescription": simplified_description,
-        "critical": row.get("critical", "false").lower() == "true",
-        "riskLevel": row.get("riskLevel", "LOW"),
-        "accountName": row.get("accountName", "N/A"),
-        "timeSensitivity": row.get("timeSensitivity", "Routine"),
-        "riskCategory": row.get("riskCategory", "Unknown"),
-        "eventImpactType": row.get("eventImpactType", "Informational"),
-        "requiredActions": row.get("requiredActions", ""),
-        "impactAnalysis": row.get("impactAnalysis", ""),
-        "consequencesIfIgnored": row.get("consequencesIfIgnored", ""),
-        "affectedResources": row.get("affectedResources", "None specified"),
+        "critical": clean_value(row.get("critical", ""), "false").lower() == "true",
+        "riskLevel": clean_value(row.get("riskLevel", ""), "LOW"),
+        "accountName": clean_value(row.get("accountName", ""), "N/A"),
+        "timeSensitivity": clean_value(row.get("timeSensitivity", ""), "Routine"),
+        "riskCategory": clean_value(row.get("riskCategory", ""), "Unknown"),
+        "eventImpactType": clean_value(row.get("eventImpactType", ""), "Informational"),
+        "requiredActions": clean_value(row.get("requiredActions", ""), ""),
+        "impactAnalysis": clean_value(row.get("impactAnalysis", ""), ""),
+        "consequencesIfIgnored": clean_value(row.get("consequencesIfIgnored", ""), ""),
+        "affectedResources": clean_value(row.get("affectedResources", ""), "None specified"),
         "analysisTimestamp": analysis_timestamp,
-        "analysisVersion": row.get("analysisVersion", "1.0"),
+        "analysisVersion": clean_value(row.get("analysisVersion", ""), "1.0"),
         "ttl": ttl_timestamp,
     }
     
     # Convert any empty strings to None (null in DynamoDB)
+    # BUT keep "N/A" as a valid string value
     for key, value in item.items():
-        if value == "":
+        if value == "" and key not in ["requiredActions", "impactAnalysis", "consequencesIfIgnored"]:
             item[key] = None
     
     # Handle decimal conversion for numeric values
