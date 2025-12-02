@@ -63,12 +63,12 @@ resource "aws_cloudwatch_event_target" "eventbridge_target" {
 resource "aws_cloudwatch_event_rule" "event_sync_schedule" {
   count = local.is_deployment_region ? 1 : 0
 
-  name                = "${var.name_prefix}-event-sync-schedule"
+  name                = "${var.name_prefix}-sync-sched"
   description         = "Trigger event processor to sync status changes from AWS Health API"
   schedule_expression = var.event_sync_schedule_expression
 
   tags = merge(var.common_tags, {
-    Name = "${var.name_prefix}-event-sync-schedule"
+    Name = "${var.name_prefix}-sync-sched"
   })
 }
 
