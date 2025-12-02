@@ -376,8 +376,9 @@ def process_single_event(bedrock_client, event_data):
         # Analyze the event with Bedrock (or reuse existing valid analysis)
         if skip_bedrock_analysis and existing_event:
             # Reuse existing valid analysis
+            # Use impactAnalysis as the analysis text since analysisText doesn't exist in schema
             logging.info("Reusing existing valid Bedrock analysis")
-            analysis = existing_event.get("analysisText", "")
+            analysis = existing_event.get("impactAnalysis", "")
             categories = {
                 "critical": existing_event.get("critical", False),
                 "risk_level": existing_event.get("riskLevel", "LOW"),
@@ -388,10 +389,12 @@ def process_single_event(bedrock_client, event_data):
                 "consequences_if_ignored": existing_event.get("consequencesIfIgnored", ""),
                 "event_impact_type": existing_event.get("eventImpactType", "Unknown"),
             }
-        else:
+        
+        # Perform new Bedrock analysis if needed
+        if not skip_bedrock_analysis:
             # Perform new Bedrock analysis (for new events or failed analyses)
             if existing_event:
-                logging.info("Performing new Bedrock analysis to fix failed analysis")
+                logging.info("Performing new Bedrock analysis to fix failed/empty analysis")
             else:
                 logging.info("Performing Bedrock analysis for new event")
             analysis = analyze_event_with_bedrock(bedrock_client, event_data)

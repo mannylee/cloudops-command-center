@@ -39,6 +39,12 @@ def analyze_and_batch_event(event, bedrock_client):
     This function implements the optimization to analyze each Health Event only once
     using Bedrock, then create batches of affected accounts for parallel processing.
     
+    OPTIMIZATION: Checks DynamoDB for existing valid analysis before calling Bedrock.
+    Only calls Bedrock if:
+    - Event is new (not in DynamoDB)
+    - Event has failed/placeholder analysis
+    - Event has blank/null analysis fields
+    
     Args:
         event (dict): Health event with affectedAccounts array
         bedrock_client: Bedrock client for analysis
@@ -60,47 +66,146 @@ def analyze_and_batch_event(event, bedrock_client):
             logging.debug(f"Event {event.get('eventTypeCode', 'unknown')} has no affected accounts - skipping")
             return []
         
-        # Analyze event once using Bedrock
-        logging.info(f"Analyzing event {event.get('eventTypeCode', 'unknown')} with Bedrock (affects {len(affected_accounts)} accounts)")
-        
-        # Fetch full event description from Health API for Bedrock analysis
-        # Use the first affected account to get the description (description is same for all accounts)
-        description = "No description available"
         event_arn = event.get("arn", "")
         
-        if event_arn and affected_accounts:
+        # Check if we can reuse existing valid analysis from DynamoDB
+        existing_analysis = None
+        skip_bedrock = False
+        
+        if event_arn and affected_accounts and DYNAMODB_TABLE_NAME:
             try:
-                # Fetch event details using first account to get description
-                health_data = fetch_health_event_details_for_org(event_arn, affected_accounts[0])
-                description = (
-                    health_data.get("details", {})
-                    .get("eventDescription", {})
-                    .get("latestDescription", "No description available")
+                import boto3
+                from analysis.bedrock_analyzer import DEFAULT_ANALYSIS_VALUES
+                
+                dynamodb = boto3.resource("dynamodb")
+                table = dynamodb.Table(DYNAMODB_TABLE_NAME)
+                
+                # Check first affected account (analysis is same for all accounts)
+                response = table.get_item(
+                    Key={
+                        "eventArn": event_arn,
+                        "accountId": affected_accounts[0]
+                    }
                 )
-                if description:
-                    logging.debug(f"Fetched description for event (length: {len(description)})")
-                else:
-                    description = "No description available"
+                
+                if "Item" in response:
+                    existing_event = response["Item"]
+                    
+                    # Check if analysis is valid
+                    required_actions = existing_event.get("requiredActions", "")
+                    risk_category = existing_event.get("riskCategory", "")
+                    impact_analysis = existing_event.get("impactAnalysis", "")
+                    
+                    # Check for failed analysis (Bedrock fallback values)
+                    is_failed_analysis = (
+                        required_actions == DEFAULT_ANALYSIS_VALUES["required_actions"] and
+                        risk_category == DEFAULT_ANALYSIS_VALUES["risk_category"] and
+                        impact_analysis == DEFAULT_ANALYSIS_VALUES["impact_analysis"]
+                    )
+                    
+                    # Check for blank/null values
+                    has_blank_or_null = (
+                        not required_actions or required_actions.strip() == "" or
+                        not risk_category or risk_category.strip() == "" or
+                        not impact_analysis or impact_analysis.strip() == ""
+                    )
+                    
+                    # Valid analysis = has all fields populated AND not failed analysis
+                    has_valid_analysis = (
+                        required_actions and required_actions.strip() and
+                        risk_category and risk_category.strip() and
+                        impact_analysis and impact_analysis.strip() and
+                        not is_failed_analysis
+                    )
+                    
+                    if has_valid_analysis:
+                        skip_bedrock = True
+                        # Use impactAnalysis as the analysis_text since analysisText field doesn't exist in schema
+                        # The SQS processor only needs categories anyway, analysis_text is just for logging
+                        existing_analysis = {
+                            "analysis_text": impact_analysis,  # Use impactAnalysis as proxy for analysis text
+                            "critical": existing_event.get("critical", False),
+                            "risk_level": existing_event.get("riskLevel", "LOW"),
+                            "impact_analysis": impact_analysis,
+                            "required_actions": required_actions,
+                            "time_sensitivity": existing_event.get("timeSensitivity", "Routine"),
+                            "risk_category": risk_category,
+                            "consequences_if_ignored": existing_event.get("consequencesIfIgnored", ""),
+                            "event_impact_type": existing_event.get("eventImpactType", "Informational"),
+                            "account_impact": existing_event.get("accountImpact", "low"),
+                        }
+                        logging.info(f"Event {event.get('eventTypeCode', 'unknown')} has valid analysis in DynamoDB, skipping Bedrock (affects {len(affected_accounts)} accounts)")
+                    elif is_failed_analysis:
+                        logging.info(f"Event {event.get('eventTypeCode', 'unknown')} has failed analysis, will retry with Bedrock")
+                    elif has_blank_or_null:
+                        logging.info(f"Event {event.get('eventTypeCode', 'unknown')} has blank/null analysis, will analyze with Bedrock")
+                        
             except Exception as e:
-                logging.warning(f"Could not fetch description for event {event.get('eventTypeCode', 'unknown')}: {str(e)}")
-                description = "No description available"
+                logging.warning(f"Error checking DynamoDB for existing analysis: {str(e)}, will proceed with Bedrock")
         
-        # Create event data structure for analysis
-        event_for_analysis = {
-            "eventTypeCode": event.get("eventTypeCode", "Unknown"),
-            "eventTypeCategory": event.get("eventTypeCategory", "Unknown"),
-            "region": event.get("region", "global"),
-            "startTime": event.get("startTime", ""),
-            "description": description,
-            "service": event.get("service", "Unknown"),
-        }
+        # Use existing analysis or perform new Bedrock analysis
+        if skip_bedrock and existing_analysis:
+            # Reuse existing valid analysis (using impactAnalysis as analysis_text)
+            analysis_text = existing_analysis.get("analysis_text", "")
+            categories = {
+                "critical": existing_analysis.get("critical", False),
+                "risk_level": existing_analysis.get("risk_level", "LOW"),
+                "impact_analysis": existing_analysis.get("impact_analysis", ""),
+                "required_actions": existing_analysis.get("required_actions", ""),
+                "time_sensitivity": existing_analysis.get("time_sensitivity", "Routine"),
+                "risk_category": existing_analysis.get("risk_category", "Unknown"),
+                "consequences_if_ignored": existing_analysis.get("consequences_if_ignored", ""),
+                "event_impact_type": existing_analysis.get("event_impact_type", "Informational"),
+                "account_impact": existing_analysis.get("account_impact", "low"),
+            }
         
-        # Perform Bedrock analysis once
-        analyzed_event = analyze_event_with_bedrock(bedrock_client, event_for_analysis)
-        analysis_text = analyzed_event.get("analysis_text", "")
-        
-        # Categorize the analysis
-        categories = categorize_analysis(analyzed_event)
+        # Perform new Bedrock analysis if needed
+        if not skip_bedrock or not existing_analysis:
+            # Perform new Bedrock analysis
+            logging.info(f"Analyzing event {event.get('eventTypeCode', 'unknown')} with Bedrock (affects {len(affected_accounts)} accounts)")
+            
+            # Fetch full event description from Health API for Bedrock analysis
+            # Use the first affected account to get the description (description is same for all accounts)
+            description = "No description available"
+            
+            if event_arn and affected_accounts:
+                try:
+                    # Fetch event details using first account to get description
+                    health_data = fetch_health_event_details_for_org(event_arn, affected_accounts[0])
+                    description = (
+                        health_data.get("details", {})
+                        .get("eventDescription", {})
+                        .get("latestDescription", "No description available")
+                    )
+                    if description:
+                        logging.debug(f"Fetched description for event (length: {len(description)})")
+                    else:
+                        description = "No description available"
+                except Exception as e:
+                    logging.warning(f"Could not fetch description for event {event.get('eventTypeCode', 'unknown')}: {str(e)}")
+                    description = "No description available"
+            
+            # Create event data structure for analysis
+            event_for_analysis = {
+                "eventTypeCode": event.get("eventTypeCode", "Unknown"),
+                "eventTypeCategory": event.get("eventTypeCategory", "Unknown"),
+                "region": event.get("region", "global"),
+                "startTime": event.get("startTime", ""),
+                "description": description,
+                "service": event.get("service", "Unknown"),
+            }
+            
+            # Perform Bedrock analysis once
+            analyzed_event = analyze_event_with_bedrock(bedrock_client, event_for_analysis)
+            analysis_text = analyzed_event.get("analysis_text", "")
+            
+            # Categorize the analysis
+            categories = categorize_analysis(analyzed_event)
+            
+            # If analysis_text is empty, use impactAnalysis as fallback
+            if not analysis_text or analysis_text.strip() == "":
+                logging.warning(f"Bedrock returned empty analysis_text, using impactAnalysis as fallback")
+                analysis_text = categories.get("impact_analysis", "Analysis data stored in category fields")
         
         logging.info(f"Analysis complete for {event.get('eventTypeCode', 'unknown')}: risk_level={categories.get('risk_level', 'UNKNOWN')}, critical={categories.get('critical', False)}")
         
@@ -472,7 +577,15 @@ def process_batch_events(health_client, bedrock_client, sqs_client, context, loo
     items_count = len(all_events)
 
     # Check if we should use SQS for parallel processing or process synchronously
-    if (
+    # ALWAYS use SQS for scheduled sync mode for better performance
+    if lookback_days is not None:
+        logging.info(
+            f"Scheduled sync mode: forcing SQS parallel processing for {items_count} events ({len(all_events_expanded)} expanded)"
+        )
+        return process_with_sqs(
+            all_events_with_accounts, bedrock_client, items_count, event_categories_to_process
+        )
+    elif (
         DYNAMODB_TABLE_NAME and len(all_events_expanded) > 10
     ):  # Use SQS for large batches
         logging.info(

@@ -18,27 +18,10 @@ variable "event_processor_function_name" {
   type        = string
 }
 
-variable "event_processor_function_arn" {
-  description = "Event processor Lambda function ARN"
-  type        = string
-}
-
 variable "log_retention_days" {
   description = "CloudWatch log retention in days"
   type        = number
   default     = 14
-}
-
-variable "event_sync_schedule_expression" {
-  description = "EventBridge schedule expression for event sync (default: every 6 hours)"
-  type        = string
-  default     = "rate(6 hours)"
-}
-
-variable "event_sync_lookback_days" {
-  description = "Number of days to look back when syncing events"
-  type        = number
-  default     = 30
 }
 
 variable "name_prefix" {

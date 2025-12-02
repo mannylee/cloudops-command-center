@@ -35,3 +35,27 @@ variable "common_tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "event_sync_schedule_expression" {
+  description = "EventBridge schedule expression for event sync (default: daily at 4 AM Singapore time / 8 PM UTC)"
+  type        = string
+  default     = "cron(0 20 * * ? *)"
+}
+
+variable "event_sync_lookback_days" {
+  description = "Number of days to look back when syncing events"
+  type        = number
+  default     = 4
+}
+
+variable "event_processor_function_arn" {
+  description = "Event processor Lambda function ARN (required for scheduled sync in deployment region)"
+  type        = string
+  default     = ""
+}
+
+variable "event_processor_function_name" {
+  description = "Event processor Lambda function name (required for scheduled sync in deployment region)"
+  type        = string
+  default     = ""
+}

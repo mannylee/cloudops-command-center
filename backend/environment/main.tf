@@ -339,16 +339,13 @@ resource "aws_sqs_queue_policy" "eventbridge_deployment_region" {
 module "cloudwatch" {
   source = "../modules/cloudwatch"
 
-  dashboard_function_name        = module.lambda.dashboard_function_name
-  events_function_name           = module.lambda.events_function_name
-  filters_function_name          = module.lambda.filters_function_name
-  event_processor_function_name  = module.lambda.event_processor_function_name
-  event_processor_function_arn   = module.lambda.event_processor_function_arn
-  log_retention_days             = 14
-  event_sync_schedule_expression = var.event_sync_schedule_expression
-  event_sync_lookback_days       = var.event_sync_lookback_days
-  name_prefix                    = local.name_prefix
-  common_tags                    = local.common_tags
+  dashboard_function_name       = module.lambda.dashboard_function_name
+  events_function_name          = module.lambda.events_function_name
+  filters_function_name         = module.lambda.filters_function_name
+  event_processor_function_name = module.lambda.event_processor_function_name
+  log_retention_days            = 14
+  name_prefix                   = local.name_prefix
+  common_tags                   = local.common_tags
 }
 
 # EventBridge rules for health event monitoring across regions
@@ -370,12 +367,16 @@ module "eventbridge_us_east_1_deployment" {
     aws = aws
   }
 
-  sqs_queue_arn        = module.sqs.event_processing_queue_arn
-  deployment_region    = var.aws_region
-  current_region       = "us-east-1"
-  account_id           = data.aws_caller_identity.current.account_id
-  eventbridge_role_arn = module.iam.eventbridge_cross_region_role_arn
-  name_prefix          = "${local.name_prefix}-us-east-1"
+  sqs_queue_arn                  = module.sqs.event_processing_queue_arn
+  deployment_region              = var.aws_region
+  current_region                 = "us-east-1"
+  account_id                     = data.aws_caller_identity.current.account_id
+  eventbridge_role_arn           = module.iam.eventbridge_cross_region_role_arn
+  event_processor_function_arn   = module.lambda.event_processor_function_arn
+  event_processor_function_name  = module.lambda.event_processor_function_name
+  event_sync_schedule_expression = var.event_sync_schedule_expression
+  event_sync_lookback_days       = var.event_sync_lookback_days
+  name_prefix                    = "${local.name_prefix}-us-east-1"
   common_tags = merge(local.common_tags, {
     Region = "us-east-1"
   })
@@ -391,12 +392,16 @@ module "eventbridge_us_east_1_monitoring" {
     aws = aws.us-east-1
   }
 
-  sqs_queue_arn        = module.sqs.event_processing_queue_arn
-  deployment_region    = var.aws_region
-  current_region       = "us-east-1"
-  account_id           = data.aws_caller_identity.current.account_id
-  eventbridge_role_arn = module.iam.eventbridge_cross_region_role_arn
-  name_prefix          = "${local.name_prefix}-us-east-1"
+  sqs_queue_arn                  = module.sqs.event_processing_queue_arn
+  deployment_region              = var.aws_region
+  current_region                 = "us-east-1"
+  account_id                     = data.aws_caller_identity.current.account_id
+  eventbridge_role_arn           = module.iam.eventbridge_cross_region_role_arn
+  event_processor_function_arn   = module.lambda.event_processor_function_arn
+  event_processor_function_name  = module.lambda.event_processor_function_name
+  event_sync_schedule_expression = var.event_sync_schedule_expression
+  event_sync_lookback_days       = var.event_sync_lookback_days
+  name_prefix                    = "${local.name_prefix}-us-east-1"
   common_tags = merge(local.common_tags, {
     Region = "us-east-1"
   })
@@ -412,12 +417,16 @@ module "eventbridge_us_east_2" {
     aws = aws.us-east-2
   }
 
-  sqs_queue_arn        = module.sqs.event_processing_queue_arn
-  deployment_region    = var.aws_region
-  current_region       = "us-east-2"
-  account_id           = data.aws_caller_identity.current.account_id
-  eventbridge_role_arn = module.iam.eventbridge_cross_region_role_arn
-  name_prefix          = "${local.name_prefix}-us-east-2"
+  sqs_queue_arn                  = module.sqs.event_processing_queue_arn
+  deployment_region              = var.aws_region
+  current_region                 = "us-east-2"
+  account_id                     = data.aws_caller_identity.current.account_id
+  eventbridge_role_arn           = module.iam.eventbridge_cross_region_role_arn
+  event_processor_function_arn   = module.lambda.event_processor_function_arn
+  event_processor_function_name  = module.lambda.event_processor_function_name
+  event_sync_schedule_expression = var.event_sync_schedule_expression
+  event_sync_lookback_days       = var.event_sync_lookback_days
+  name_prefix                    = "${local.name_prefix}-us-east-2"
   common_tags = merge(local.common_tags, {
     Region = "us-east-2"
   })
@@ -433,12 +442,16 @@ module "eventbridge_us_west_1" {
     aws = aws.us-west-1
   }
 
-  sqs_queue_arn        = module.sqs.event_processing_queue_arn
-  deployment_region    = var.aws_region
-  current_region       = "us-west-1"
-  account_id           = data.aws_caller_identity.current.account_id
-  eventbridge_role_arn = module.iam.eventbridge_cross_region_role_arn
-  name_prefix          = "${local.name_prefix}-us-west-1"
+  sqs_queue_arn                  = module.sqs.event_processing_queue_arn
+  deployment_region              = var.aws_region
+  current_region                 = "us-west-1"
+  account_id                     = data.aws_caller_identity.current.account_id
+  eventbridge_role_arn           = module.iam.eventbridge_cross_region_role_arn
+  event_processor_function_arn   = module.lambda.event_processor_function_arn
+  event_processor_function_name  = module.lambda.event_processor_function_name
+  event_sync_schedule_expression = var.event_sync_schedule_expression
+  event_sync_lookback_days       = var.event_sync_lookback_days
+  name_prefix                    = "${local.name_prefix}-us-west-1"
   common_tags = merge(local.common_tags, {
     Region = "us-west-1"
   })
@@ -454,12 +467,16 @@ module "eventbridge_us_west_2" {
     aws = aws.us-west-2
   }
 
-  sqs_queue_arn        = module.sqs.event_processing_queue_arn
-  deployment_region    = var.aws_region
-  current_region       = "us-west-2"
-  account_id           = data.aws_caller_identity.current.account_id
-  eventbridge_role_arn = module.iam.eventbridge_cross_region_role_arn
-  name_prefix          = "${local.name_prefix}-us-west-2"
+  sqs_queue_arn                  = module.sqs.event_processing_queue_arn
+  deployment_region              = var.aws_region
+  current_region                 = "us-west-2"
+  account_id                     = data.aws_caller_identity.current.account_id
+  eventbridge_role_arn           = module.iam.eventbridge_cross_region_role_arn
+  event_processor_function_arn   = module.lambda.event_processor_function_arn
+  event_processor_function_name  = module.lambda.event_processor_function_name
+  event_sync_schedule_expression = var.event_sync_schedule_expression
+  event_sync_lookback_days       = var.event_sync_lookback_days
+  name_prefix                    = "${local.name_prefix}-us-west-2"
   common_tags = merge(local.common_tags, {
     Region = "us-west-2"
   })
@@ -475,12 +492,16 @@ module "eventbridge_eu_west_1" {
     aws = aws.eu-west-1
   }
 
-  sqs_queue_arn        = module.sqs.event_processing_queue_arn
-  deployment_region    = var.aws_region
-  current_region       = "eu-west-1"
-  account_id           = data.aws_caller_identity.current.account_id
-  eventbridge_role_arn = module.iam.eventbridge_cross_region_role_arn
-  name_prefix          = "${local.name_prefix}-eu-west-1"
+  sqs_queue_arn                  = module.sqs.event_processing_queue_arn
+  deployment_region              = var.aws_region
+  current_region                 = "eu-west-1"
+  account_id                     = data.aws_caller_identity.current.account_id
+  eventbridge_role_arn           = module.iam.eventbridge_cross_region_role_arn
+  event_processor_function_arn   = module.lambda.event_processor_function_arn
+  event_processor_function_name  = module.lambda.event_processor_function_name
+  event_sync_schedule_expression = var.event_sync_schedule_expression
+  event_sync_lookback_days       = var.event_sync_lookback_days
+  name_prefix                    = "${local.name_prefix}-eu-west-1"
   common_tags = merge(local.common_tags, {
     Region = "eu-west-1"
   })
@@ -496,12 +517,16 @@ module "eventbridge_eu_west_2" {
     aws = aws.eu-west-2
   }
 
-  sqs_queue_arn        = module.sqs.event_processing_queue_arn
-  deployment_region    = var.aws_region
-  current_region       = "eu-west-2"
-  account_id           = data.aws_caller_identity.current.account_id
-  eventbridge_role_arn = module.iam.eventbridge_cross_region_role_arn
-  name_prefix          = "${local.name_prefix}-eu-west-2"
+  sqs_queue_arn                  = module.sqs.event_processing_queue_arn
+  deployment_region              = var.aws_region
+  current_region                 = "eu-west-2"
+  account_id                     = data.aws_caller_identity.current.account_id
+  eventbridge_role_arn           = module.iam.eventbridge_cross_region_role_arn
+  event_processor_function_arn   = module.lambda.event_processor_function_arn
+  event_processor_function_name  = module.lambda.event_processor_function_name
+  event_sync_schedule_expression = var.event_sync_schedule_expression
+  event_sync_lookback_days       = var.event_sync_lookback_days
+  name_prefix                    = "${local.name_prefix}-eu-west-2"
   common_tags = merge(local.common_tags, {
     Region = "eu-west-2"
   })
@@ -517,12 +542,16 @@ module "eventbridge_eu_west_3" {
     aws = aws.eu-west-3
   }
 
-  sqs_queue_arn        = module.sqs.event_processing_queue_arn
-  deployment_region    = var.aws_region
-  current_region       = "eu-west-3"
-  account_id           = data.aws_caller_identity.current.account_id
-  eventbridge_role_arn = module.iam.eventbridge_cross_region_role_arn
-  name_prefix          = "${local.name_prefix}-eu-west-3"
+  sqs_queue_arn                  = module.sqs.event_processing_queue_arn
+  deployment_region              = var.aws_region
+  current_region                 = "eu-west-3"
+  account_id                     = data.aws_caller_identity.current.account_id
+  eventbridge_role_arn           = module.iam.eventbridge_cross_region_role_arn
+  event_processor_function_arn   = module.lambda.event_processor_function_arn
+  event_processor_function_name  = module.lambda.event_processor_function_name
+  event_sync_schedule_expression = var.event_sync_schedule_expression
+  event_sync_lookback_days       = var.event_sync_lookback_days
+  name_prefix                    = "${local.name_prefix}-eu-west-3"
   common_tags = merge(local.common_tags, {
     Region = "eu-west-3"
   })
@@ -538,12 +567,16 @@ module "eventbridge_eu_central_1" {
     aws = aws.eu-central-1
   }
 
-  sqs_queue_arn        = module.sqs.event_processing_queue_arn
-  deployment_region    = var.aws_region
-  current_region       = "eu-central-1"
-  account_id           = data.aws_caller_identity.current.account_id
-  eventbridge_role_arn = module.iam.eventbridge_cross_region_role_arn
-  name_prefix          = "${local.name_prefix}-eu-central-1"
+  sqs_queue_arn                  = module.sqs.event_processing_queue_arn
+  deployment_region              = var.aws_region
+  current_region                 = "eu-central-1"
+  account_id                     = data.aws_caller_identity.current.account_id
+  eventbridge_role_arn           = module.iam.eventbridge_cross_region_role_arn
+  event_processor_function_arn   = module.lambda.event_processor_function_arn
+  event_processor_function_name  = module.lambda.event_processor_function_name
+  event_sync_schedule_expression = var.event_sync_schedule_expression
+  event_sync_lookback_days       = var.event_sync_lookback_days
+  name_prefix                    = "${local.name_prefix}-eu-central-1"
   common_tags = merge(local.common_tags, {
     Region = "eu-central-1"
   })
@@ -559,12 +592,16 @@ module "eventbridge_eu_north_1" {
     aws = aws.eu-north-1
   }
 
-  sqs_queue_arn        = module.sqs.event_processing_queue_arn
-  deployment_region    = var.aws_region
-  current_region       = "eu-north-1"
-  account_id           = data.aws_caller_identity.current.account_id
-  eventbridge_role_arn = module.iam.eventbridge_cross_region_role_arn
-  name_prefix          = "${local.name_prefix}-eu-north-1"
+  sqs_queue_arn                  = module.sqs.event_processing_queue_arn
+  deployment_region              = var.aws_region
+  current_region                 = "eu-north-1"
+  account_id                     = data.aws_caller_identity.current.account_id
+  eventbridge_role_arn           = module.iam.eventbridge_cross_region_role_arn
+  event_processor_function_arn   = module.lambda.event_processor_function_arn
+  event_processor_function_name  = module.lambda.event_processor_function_name
+  event_sync_schedule_expression = var.event_sync_schedule_expression
+  event_sync_lookback_days       = var.event_sync_lookback_days
+  name_prefix                    = "${local.name_prefix}-eu-north-1"
   common_tags = merge(local.common_tags, {
     Region = "eu-north-1"
   })
@@ -580,12 +617,16 @@ module "eventbridge_ap_southeast_1" {
     aws = aws.ap-southeast-1
   }
 
-  sqs_queue_arn        = module.sqs.event_processing_queue_arn
-  deployment_region    = var.aws_region
-  current_region       = "ap-southeast-1"
-  account_id           = data.aws_caller_identity.current.account_id
-  eventbridge_role_arn = module.iam.eventbridge_cross_region_role_arn
-  name_prefix          = "${local.name_prefix}-ap-southeast-1"
+  sqs_queue_arn                  = module.sqs.event_processing_queue_arn
+  deployment_region              = var.aws_region
+  current_region                 = "ap-southeast-1"
+  account_id                     = data.aws_caller_identity.current.account_id
+  eventbridge_role_arn           = module.iam.eventbridge_cross_region_role_arn
+  event_processor_function_arn   = module.lambda.event_processor_function_arn
+  event_processor_function_name  = module.lambda.event_processor_function_name
+  event_sync_schedule_expression = var.event_sync_schedule_expression
+  event_sync_lookback_days       = var.event_sync_lookback_days
+  name_prefix                    = "${local.name_prefix}-ap-southeast-1"
   common_tags = merge(local.common_tags, {
     Region = "ap-southeast-1"
   })
@@ -601,12 +642,16 @@ module "eventbridge_ap_southeast_2" {
     aws = aws.ap-southeast-2
   }
 
-  sqs_queue_arn        = module.sqs.event_processing_queue_arn
-  deployment_region    = var.aws_region
-  current_region       = "ap-southeast-2"
-  account_id           = data.aws_caller_identity.current.account_id
-  eventbridge_role_arn = module.iam.eventbridge_cross_region_role_arn
-  name_prefix          = "${local.name_prefix}-ap-southeast-2"
+  sqs_queue_arn                  = module.sqs.event_processing_queue_arn
+  deployment_region              = var.aws_region
+  current_region                 = "ap-southeast-2"
+  account_id                     = data.aws_caller_identity.current.account_id
+  eventbridge_role_arn           = module.iam.eventbridge_cross_region_role_arn
+  event_processor_function_arn   = module.lambda.event_processor_function_arn
+  event_processor_function_name  = module.lambda.event_processor_function_name
+  event_sync_schedule_expression = var.event_sync_schedule_expression
+  event_sync_lookback_days       = var.event_sync_lookback_days
+  name_prefix                    = "${local.name_prefix}-ap-southeast-2"
   common_tags = merge(local.common_tags, {
     Region = "ap-southeast-2"
   })
@@ -622,12 +667,16 @@ module "eventbridge_ap_northeast_1" {
     aws = aws.ap-northeast-1
   }
 
-  sqs_queue_arn        = module.sqs.event_processing_queue_arn
-  deployment_region    = var.aws_region
-  current_region       = "ap-northeast-1"
-  account_id           = data.aws_caller_identity.current.account_id
-  eventbridge_role_arn = module.iam.eventbridge_cross_region_role_arn
-  name_prefix          = "${local.name_prefix}-ap-northeast-1"
+  sqs_queue_arn                  = module.sqs.event_processing_queue_arn
+  deployment_region              = var.aws_region
+  current_region                 = "ap-northeast-1"
+  account_id                     = data.aws_caller_identity.current.account_id
+  eventbridge_role_arn           = module.iam.eventbridge_cross_region_role_arn
+  event_processor_function_arn   = module.lambda.event_processor_function_arn
+  event_processor_function_name  = module.lambda.event_processor_function_name
+  event_sync_schedule_expression = var.event_sync_schedule_expression
+  event_sync_lookback_days       = var.event_sync_lookback_days
+  name_prefix                    = "${local.name_prefix}-ap-northeast-1"
   common_tags = merge(local.common_tags, {
     Region = "ap-northeast-1"
   })
@@ -643,12 +692,16 @@ module "eventbridge_ap_northeast_2" {
     aws = aws.ap-northeast-2
   }
 
-  sqs_queue_arn        = module.sqs.event_processing_queue_arn
-  deployment_region    = var.aws_region
-  current_region       = "ap-northeast-2"
-  account_id           = data.aws_caller_identity.current.account_id
-  eventbridge_role_arn = module.iam.eventbridge_cross_region_role_arn
-  name_prefix          = "${local.name_prefix}-ap-northeast-2"
+  sqs_queue_arn                  = module.sqs.event_processing_queue_arn
+  deployment_region              = var.aws_region
+  current_region                 = "ap-northeast-2"
+  account_id                     = data.aws_caller_identity.current.account_id
+  eventbridge_role_arn           = module.iam.eventbridge_cross_region_role_arn
+  event_processor_function_arn   = module.lambda.event_processor_function_arn
+  event_processor_function_name  = module.lambda.event_processor_function_name
+  event_sync_schedule_expression = var.event_sync_schedule_expression
+  event_sync_lookback_days       = var.event_sync_lookback_days
+  name_prefix                    = "${local.name_prefix}-ap-northeast-2"
   common_tags = merge(local.common_tags, {
     Region = "ap-northeast-2"
   })
@@ -664,12 +717,16 @@ module "eventbridge_ap_northeast_3" {
     aws = aws.ap-northeast-3
   }
 
-  sqs_queue_arn        = module.sqs.event_processing_queue_arn
-  deployment_region    = var.aws_region
-  current_region       = "ap-northeast-3"
-  account_id           = data.aws_caller_identity.current.account_id
-  eventbridge_role_arn = module.iam.eventbridge_cross_region_role_arn
-  name_prefix          = "${local.name_prefix}-ap-northeast-3"
+  sqs_queue_arn                  = module.sqs.event_processing_queue_arn
+  deployment_region              = var.aws_region
+  current_region                 = "ap-northeast-3"
+  account_id                     = data.aws_caller_identity.current.account_id
+  eventbridge_role_arn           = module.iam.eventbridge_cross_region_role_arn
+  event_processor_function_arn   = module.lambda.event_processor_function_arn
+  event_processor_function_name  = module.lambda.event_processor_function_name
+  event_sync_schedule_expression = var.event_sync_schedule_expression
+  event_sync_lookback_days       = var.event_sync_lookback_days
+  name_prefix                    = "${local.name_prefix}-ap-northeast-3"
   common_tags = merge(local.common_tags, {
     Region = "ap-northeast-3"
   })
@@ -685,12 +742,16 @@ module "eventbridge_ap_south_1" {
     aws = aws.ap-south-1
   }
 
-  sqs_queue_arn        = module.sqs.event_processing_queue_arn
-  deployment_region    = var.aws_region
-  current_region       = "ap-south-1"
-  account_id           = data.aws_caller_identity.current.account_id
-  eventbridge_role_arn = module.iam.eventbridge_cross_region_role_arn
-  name_prefix          = "${local.name_prefix}-ap-south-1"
+  sqs_queue_arn                  = module.sqs.event_processing_queue_arn
+  deployment_region              = var.aws_region
+  current_region                 = "ap-south-1"
+  account_id                     = data.aws_caller_identity.current.account_id
+  eventbridge_role_arn           = module.iam.eventbridge_cross_region_role_arn
+  event_processor_function_arn   = module.lambda.event_processor_function_arn
+  event_processor_function_name  = module.lambda.event_processor_function_name
+  event_sync_schedule_expression = var.event_sync_schedule_expression
+  event_sync_lookback_days       = var.event_sync_lookback_days
+  name_prefix                    = "${local.name_prefix}-ap-south-1"
   common_tags = merge(local.common_tags, {
     Region = "ap-south-1"
   })
@@ -706,12 +767,16 @@ module "eventbridge_ca_central_1" {
     aws = aws.ca-central-1
   }
 
-  sqs_queue_arn        = module.sqs.event_processing_queue_arn
-  deployment_region    = var.aws_region
-  current_region       = "ca-central-1"
-  account_id           = data.aws_caller_identity.current.account_id
-  eventbridge_role_arn = module.iam.eventbridge_cross_region_role_arn
-  name_prefix          = "${local.name_prefix}-ca-central-1"
+  sqs_queue_arn                  = module.sqs.event_processing_queue_arn
+  deployment_region              = var.aws_region
+  current_region                 = "ca-central-1"
+  account_id                     = data.aws_caller_identity.current.account_id
+  eventbridge_role_arn           = module.iam.eventbridge_cross_region_role_arn
+  event_processor_function_arn   = module.lambda.event_processor_function_arn
+  event_processor_function_name  = module.lambda.event_processor_function_name
+  event_sync_schedule_expression = var.event_sync_schedule_expression
+  event_sync_lookback_days       = var.event_sync_lookback_days
+  name_prefix                    = "${local.name_prefix}-ca-central-1"
   common_tags = merge(local.common_tags, {
     Region = "ca-central-1"
   })
@@ -727,12 +792,16 @@ module "eventbridge_sa_east_1" {
     aws = aws.sa-east-1
   }
 
-  sqs_queue_arn        = module.sqs.event_processing_queue_arn
-  deployment_region    = var.aws_region
-  current_region       = "sa-east-1"
-  account_id           = data.aws_caller_identity.current.account_id
-  eventbridge_role_arn = module.iam.eventbridge_cross_region_role_arn
-  name_prefix          = "${local.name_prefix}-sa-east-1"
+  sqs_queue_arn                  = module.sqs.event_processing_queue_arn
+  deployment_region              = var.aws_region
+  current_region                 = "sa-east-1"
+  account_id                     = data.aws_caller_identity.current.account_id
+  eventbridge_role_arn           = module.iam.eventbridge_cross_region_role_arn
+  event_processor_function_arn   = module.lambda.event_processor_function_arn
+  event_processor_function_name  = module.lambda.event_processor_function_name
+  event_sync_schedule_expression = var.event_sync_schedule_expression
+  event_sync_lookback_days       = var.event_sync_lookback_days
+  name_prefix                    = "${local.name_prefix}-sa-east-1"
   common_tags = merge(local.common_tags, {
     Region = "sa-east-1"
   })

@@ -5,6 +5,9 @@ backend/test/
 backend/testing/**/output/
 backend/testing/**/input/
 backend/testing/health-events-analyzer-v2
+backend/testing/logs/
+backend/testing/dynamodb-loader/modify_test_events.py
+backend/testing/dynamodb-loader/run_modify_test_events.sh
 
 # Pyenv
 .python-version

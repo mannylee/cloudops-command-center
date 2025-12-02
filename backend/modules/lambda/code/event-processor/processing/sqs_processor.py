@@ -123,13 +123,11 @@ def process_batch_message(message_body, health_client, sqs_record, context):
         total_batches = message_body.get("totalBatches", 1)
         
         # Validate required fields
+        # Note: analysis field is optional - we only need categories
+        # If analysis is empty, we'll use a placeholder
         if not analysis:
-            logging.error("Analysis payload missing from SQS message")
-            return {
-                "batchItemFailures": [
-                    {"itemIdentifier": sqs_record.get("messageId")}
-                ]
-            }
+            logging.warning("Analysis text is empty, using placeholder (categories are what matter)")
+            analysis = "Analysis data stored in category fields"
         
         if not account_batch:
             logging.error("Accounts array missing or empty in SQS message")

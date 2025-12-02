@@ -57,3 +57,42 @@ resource "aws_cloudwatch_event_target" "eventbridge_target" {
     create_before_destroy = false
   }
 }
+
+# EventBridge Scheduled Rule for Event Sync (only in deployment region)
+# Periodically syncs event status changes from AWS Health API
+resource "aws_cloudwatch_event_rule" "event_sync_schedule" {
+  count = local.is_deployment_region ? 1 : 0
+
+  name                = "${var.name_prefix}-event-sync-schedule"
+  description         = "Trigger event processor to sync status changes from AWS Health API"
+  schedule_expression = var.event_sync_schedule_expression
+
+  tags = merge(var.common_tags, {
+    Name = "${var.name_prefix}-event-sync-schedule"
+  })
+}
+
+# EventBridge Target for Event Sync (only in deployment region)
+resource "aws_cloudwatch_event_target" "event_sync_target" {
+  count = local.is_deployment_region ? 1 : 0
+
+  rule      = aws_cloudwatch_event_rule.event_sync_schedule[0].name
+  target_id = "EventProcessorSync"
+  arn       = var.event_processor_function_arn
+
+  input = jsonencode({
+    mode          = "scheduled_sync"
+    lookback_days = var.event_sync_lookback_days
+  })
+}
+
+# Lambda Permission for EventBridge Sync (only in deployment region)
+resource "aws_lambda_permission" "allow_eventbridge_sync" {
+  count = local.is_deployment_region ? 1 : 0
+
+  statement_id  = "AllowExecutionFromEventBridgeSync"
+  action        = "lambda:InvokeFunction"
+  function_name = var.event_processor_function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.event_sync_schedule[0].arn
+}
