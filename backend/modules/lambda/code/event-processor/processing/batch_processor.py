@@ -32,7 +32,125 @@ DYNAMODB_TABLE_NAME = os.environ.get("DYNAMODB_HEALTH_EVENTS_TABLE_NAME")
 COUNTS_TABLE_NAME = os.environ.get("DYNAMODB_COUNTS_TABLE_NAME")
 
 
-def analyze_and_batch_event(event, bedrock_client):
+def has_valid_analysis_in_dynamodb(event):
+    """
+    Check if an event has valid analysis in DynamoDB.
+    
+    Args:
+        event (dict): Health event with arn and affectedAccounts
+        
+    Returns:
+        bool: True if valid analysis exists, False otherwise
+    """
+    if not DYNAMODB_TABLE_NAME:
+        return False
+    
+    event_arn = event.get("arn", "")
+    affected_accounts = event.get("affectedAccounts", [])
+    
+    if not event_arn or not affected_accounts:
+        return False
+    
+    try:
+        import boto3
+        from analysis.bedrock_analyzer import DEFAULT_ANALYSIS_VALUES
+        
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(DYNAMODB_TABLE_NAME)
+        
+        # Check first affected account (analysis is same for all accounts)
+        response = table.get_item(
+            Key={
+                "eventArn": event_arn,
+                "accountId": affected_accounts[0]
+            }
+        )
+        
+        if "Item" not in response:
+            return False
+        
+        existing_event = response["Item"]
+        
+        # Check if analysis is valid
+        required_actions = existing_event.get("requiredActions", "")
+        risk_category = existing_event.get("riskCategory", "")
+        impact_analysis = existing_event.get("impactAnalysis", "")
+        
+        # Check for failed analysis (Bedrock fallback values)
+        is_failed_analysis = (
+            required_actions == DEFAULT_ANALYSIS_VALUES["required_actions"] and
+            risk_category == DEFAULT_ANALYSIS_VALUES["risk_category"] and
+            impact_analysis == DEFAULT_ANALYSIS_VALUES["impact_analysis"]
+        )
+        
+        # Valid analysis = has all fields populated AND not failed analysis
+        has_valid_analysis = (
+            required_actions and required_actions.strip() and
+            risk_category and risk_category.strip() and
+            impact_analysis and impact_analysis.strip() and
+            not is_failed_analysis
+        )
+        
+        return has_valid_analysis
+        
+    except Exception as e:
+        logging.debug(f"Error checking DynamoDB for event {event.get('eventTypeCode', 'unknown')}: {str(e)}")
+        return False
+
+
+def should_skip_analysis_in_main_lambda(all_events_with_accounts):
+    """
+    Decide if we should skip Bedrock analysis in main Lambda.
+    
+    Skip analysis when:
+    1. Processing many events (>10) AND
+    2. DynamoDB cache hit rate is low (<50%)
+    
+    This pushes Bedrock calls to SQS workers for parallel processing,
+    which is much faster for first-time population.
+    
+    Args:
+        all_events_with_accounts: List of events with affectedAccounts arrays
+        
+    Returns:
+        bool: True if should skip analysis in main Lambda
+    """
+    # If small batch, don't bother optimizing
+    if len(all_events_with_accounts) <= 10:
+        logging.info("Small batch (≤10 events), will process with DynamoDB checks")
+        return False
+    
+    # Sample a few events to check cache hit rate
+    sample_size = min(5, len(all_events_with_accounts))
+    cache_hits = 0
+    
+    logging.info(f"Sampling {sample_size} events to check DynamoDB cache hit rate...")
+    
+    for event in all_events_with_accounts[:sample_size]:
+        if has_valid_analysis_in_dynamodb(event):
+            cache_hits += 1
+            logging.debug(f"Cache HIT for event {event.get('eventTypeCode', 'unknown')}")
+        else:
+            logging.debug(f"Cache MISS for event {event.get('eventTypeCode', 'unknown')}")
+    
+    cache_hit_rate = cache_hits / sample_size
+    
+    # If less than 50% cache hit rate, skip analysis in main Lambda
+    if cache_hit_rate < 0.5:
+        logging.info(
+            f"Low cache hit rate ({cache_hit_rate:.0%} - {cache_hits}/{sample_size}), "
+            f"skipping Bedrock analysis in main Lambda. SQS workers will handle analysis in parallel."
+        )
+        return True
+    else:
+        logging.info(
+            f"Good cache hit rate ({cache_hit_rate:.0%} - {cache_hits}/{sample_size}), "
+            f"will check DynamoDB per event and reuse cached analysis where possible."
+        )
+        return False
+
+
+def analyze_and_batch_event(event, bedrock_client, skip_analysis=False):
     """
     Analyze event once and create account batches for parallel processing.
     
@@ -48,13 +166,14 @@ def analyze_and_batch_event(event, bedrock_client):
     Args:
         event (dict): Health event with affectedAccounts array
         bedrock_client: Bedrock client for analysis
+        skip_analysis (bool): If True, skip Bedrock analysis entirely and send raw events to SQS
         
     Returns:
         list: Batch messages ready for SQS, each containing:
             - event: Event metadata
             - accounts: List of up to 10 account IDs
-            - analysis: Pre-computed Bedrock analysis text
-            - categories: Pre-computed analysis categories
+            - analysis: Pre-computed Bedrock analysis text (or None if skip_analysis=True)
+            - categories: Pre-computed analysis categories (or None if skip_analysis=True)
             - batchNumber: Current batch number (1-indexed)
             - totalBatches: Total number of batches for this event
     """
@@ -67,6 +186,33 @@ def analyze_and_batch_event(event, bedrock_client):
             return []
         
         event_arn = event.get("arn", "")
+        
+        # If skip_analysis is True, create raw batches without any Bedrock analysis
+        if skip_analysis:
+            logging.debug(f"Skipping analysis for event {event.get('eventTypeCode', 'unknown')}, will be handled by SQS workers")
+            
+            # Create batches of accounts (default batch size: 10)
+            account_batches = create_account_batches(affected_accounts, batch_size=10)
+            
+            # Build SQS messages WITHOUT analysis (SQS workers will call Bedrock)
+            batch_messages = []
+            for batch_num, account_batch in enumerate(account_batches):
+                message = {
+                    "event": event,  # Event metadata
+                    "accounts": account_batch,  # Up to 10 accounts
+                    "analysis": None,  # No pre-computed analysis
+                    "categories": None,  # No pre-computed categories
+                    "batchNumber": batch_num + 1,  # 1-indexed
+                    "totalBatches": len(account_batches)
+                }
+                batch_messages.append(message)
+            
+            logging.debug(
+                f"Created {len(batch_messages)} raw batches for event {event.get('eventTypeCode', 'unknown')} "
+                f"({len(affected_accounts)} accounts) - analysis will be done in SQS"
+            )
+            
+            return batch_messages
         
         # Check if we can reuse existing valid analysis from DynamoDB
         existing_analysis = None
@@ -697,8 +843,9 @@ def process_with_sqs(all_events_with_accounts, bedrock_client, items_count, even
     """
     Process events using SQS with optimized Bedrock analysis.
     
-    This function implements the optimization where each event is analyzed once
-    with Bedrock, then batched by affected accounts for parallel processing.
+    This function implements smart optimization:
+    - High cache hit rate: Check DynamoDB per event, reuse cached analysis
+    - Low cache hit rate: Skip analysis in main Lambda, let SQS workers handle it in parallel
     
     Args:
         all_events_with_accounts: List of events with affectedAccounts arrays
@@ -712,6 +859,9 @@ def process_with_sqs(all_events_with_accounts, bedrock_client, items_count, even
     all_batch_messages = []
     bedrock_calls = 0
     filtered_count = 0
+    
+    # Smart detection: Should we skip analysis in main Lambda?
+    skip_analysis = should_skip_analysis_in_main_lambda(all_events_with_accounts)
     
     # Process each event: analyze once and create account batches
     for event in all_events_with_accounts:
@@ -742,18 +892,26 @@ def process_with_sqs(all_events_with_accounts, bedrock_client, items_count, even
         if event_arn:
             event["eventArn"] = event_arn
         
-        # Analyze event once and create batches
-        batch_messages = analyze_and_batch_event(event, bedrock_client)
+        # Analyze event once and create batches (or skip analysis if detected)
+        batch_messages = analyze_and_batch_event(event, bedrock_client, skip_analysis=skip_analysis)
         
         if batch_messages:
             all_batch_messages.extend(batch_messages)
-            bedrock_calls += 1
+            # Only count as Bedrock call if we actually analyzed (not skipped)
+            if not skip_analysis:
+                bedrock_calls += 1
     
-    logging.info(
-        f"Optimization: {bedrock_calls} Bedrock calls for "
-        f"{len(all_batch_messages)} batches "
-        f"(avoided {len(all_batch_messages) - bedrock_calls} duplicate calls)"
-    )
+    if skip_analysis:
+        logging.info(
+            f"Skipped analysis in main Lambda: {len(all_batch_messages)} batches created "
+            f"(SQS workers will perform {items_count - filtered_count} Bedrock calls in parallel)"
+        )
+    else:
+        logging.info(
+            f"Optimization: {bedrock_calls} Bedrock calls for "
+            f"{len(all_batch_messages)} batches "
+            f"(avoided {len(all_batch_messages) - bedrock_calls} duplicate calls)"
+        )
     
     # Send all batches to SQS for parallel processing
     sqs_result = send_events_to_sqs(all_batch_messages)
@@ -767,19 +925,22 @@ def process_with_sqs(all_events_with_accounts, bedrock_client, items_count, even
         }
     else:
         # Return SQS batch processing result with optimization metrics
+        processing_mode = "sqs_parallel_processing_deferred_analysis" if skip_analysis else "sqs_parallel_processing_optimized"
+        
         return {
             "statusCode": 200,
             "body": json.dumps(
                 {
-                    "mode": "sqs_parallel_processing_optimized",
+                    "mode": processing_mode,
                     "total_events": items_count,
-                    "bedrock_calls": bedrock_calls,
+                    "bedrock_calls_in_main_lambda": bedrock_calls,
+                    "analysis_deferred_to_sqs": skip_analysis,
                     "batches_created": len(all_batch_messages),
                     "batches_sent_to_sqs": sqs_result["sent"],
                     "batches_failed_to_send": sqs_result["failed"],
                     "filtered_events": filtered_count,
-                    "optimization_savings": f"Avoided {len(all_batch_messages) - bedrock_calls} duplicate Bedrock calls",
-                    "message": f"Sent {sqs_result['sent']} batches to SQS for parallel processing (analyzed {bedrock_calls} unique events)",
+                    "optimization_note": "Analysis deferred to SQS workers for parallel processing" if skip_analysis else f"Avoided {len(all_batch_messages) - bedrock_calls} duplicate Bedrock calls",
+                    "message": f"Sent {sqs_result['sent']} batches to SQS for parallel processing" + (f" (analyzed {bedrock_calls} unique events)" if not skip_analysis else " (analysis will be done by SQS workers)"),
                 }
             ),
         }

@@ -84,7 +84,7 @@ def process_sqs_event(event, context):
         if "accounts" in message_body and "analysis" in message_body and "categories" in message_body:
             # New optimized batch format
             logging.info("Processing message in new batch format (optimized)")
-            return process_batch_message(message_body, health_client, sqs_record, context)
+            return process_batch_message(message_body, health_client, bedrock_client, sqs_record, context)
         else:
             # Old single-event format (backward compatibility)
             logging.info("Processing message in legacy single-event format")
@@ -100,13 +100,14 @@ def process_sqs_event(event, context):
         }
 
 
-def process_batch_message(message_body, health_client, sqs_record, context):
+def process_batch_message(message_body, health_client, bedrock_client, sqs_record, context):
     """
     Process new batch message format with pre-computed analysis.
     
     Args:
         message_body: Parsed message body with batch data
         health_client: AWS Health client
+        bedrock_client: Bedrock client for analysis (when deferred)
         sqs_record: SQS record for error handling
         context: Lambda context
         
@@ -123,12 +124,6 @@ def process_batch_message(message_body, health_client, sqs_record, context):
         total_batches = message_body.get("totalBatches", 1)
         
         # Validate required fields
-        # Note: analysis field is optional - we only need categories
-        # If analysis is empty, we'll use a placeholder
-        if not analysis:
-            logging.warning("Analysis text is empty, using placeholder (categories are what matter)")
-            analysis = "Analysis data stored in category fields"
-        
         if not account_batch:
             logging.error("Accounts array missing or empty in SQS message")
             return {
@@ -137,16 +132,92 @@ def process_batch_message(message_body, health_client, sqs_record, context):
                 ]
             }
         
-        logging.info(
-            f"Processing batch {batch_num}/{total_batches} "
-            f"with {len(account_batch)} accounts "
-            f"(reusing pre-computed analysis)"
-        )
+        # Check if we need to perform Bedrock analysis (deferred from main Lambda)
+        needs_bedrock_analysis = (not analysis or not categories or 
+                                   analysis is None or categories is None)
+        
+        if needs_bedrock_analysis:
+            logging.info(
+                f"Processing batch {batch_num}/{total_batches} "
+                f"with {len(account_batch)} accounts "
+                f"(will perform Bedrock analysis in SQS worker)"
+            )
+        else:
+            logging.info(
+                f"Processing batch {batch_num}/{total_batches} "
+                f"with {len(account_batch)} accounts "
+                f"(reusing pre-computed analysis)"
+            )
         
         # Import here to avoid circular dependency
         from aws_clients.organizations_client import get_account_name
         from aws_clients.health_client import fetch_health_event_details_for_org
         from utils.helpers import format_time, extract_affected_resources
+        from analysis.bedrock_analyzer import analyze_event_with_bedrock, categorize_analysis
+        
+        # If analysis is missing, perform Bedrock analysis now (once for all accounts in batch)
+        if needs_bedrock_analysis:
+            logging.info(f"Performing Bedrock analysis for event {event_data.get('eventTypeCode', 'unknown')}")
+            
+            # Fetch event description for Bedrock analysis
+            event_arn = event_data.get("arn", "")
+            description = "No description available"
+            
+            if event_arn and account_batch:
+                try:
+                    # Fetch event details using first account to get description
+                    health_data = fetch_health_event_details_for_org(event_arn, account_batch[0])
+                    description = (
+                        health_data.get("details", {})
+                        .get("eventDescription", {})
+                        .get("latestDescription", "No description available")
+                    )
+                    if not description:
+                        description = "No description available"
+                except Exception as e:
+                    logging.warning(f"Could not fetch description for Bedrock analysis: {str(e)}")
+                    description = "No description available"
+            
+            # Create event data structure for analysis
+            event_for_analysis = {
+                "eventTypeCode": event_data.get("eventTypeCode", "Unknown"),
+                "eventTypeCategory": event_data.get("eventTypeCategory", "Unknown"),
+                "region": event_data.get("region", "global"),
+                "startTime": event_data.get("startTime", ""),
+                "description": description,
+                "service": event_data.get("service", "Unknown"),
+            }
+            
+            # Perform Bedrock analysis
+            try:
+                analyzed_event = analyze_event_with_bedrock(bedrock_client, event_for_analysis)
+                analysis = analyzed_event.get("analysis_text", "")
+                categories = categorize_analysis(analyzed_event)
+                
+                # If analysis_text is empty, use impactAnalysis as fallback
+                if not analysis or analysis.strip() == "":
+                    logging.warning(f"Bedrock returned empty analysis_text, using impactAnalysis as fallback")
+                    analysis = categories.get("impact_analysis", "Analysis data stored in category fields")
+                
+                logging.info(
+                    f"Bedrock analysis complete: risk_level={categories.get('risk_level', 'UNKNOWN')}, "
+                    f"critical={categories.get('critical', False)}"
+                )
+            except Exception as e:
+                logging.error(f"Error performing Bedrock analysis in SQS worker: {str(e)}")
+                # Use fallback values
+                analysis = "Analysis failed in SQS worker"
+                categories = {
+                    "critical": False,
+                    "risk_level": "LOW",
+                    "impact_analysis": "Analysis failed",
+                    "required_actions": "Review event manually",
+                    "time_sensitivity": "Routine",
+                    "risk_category": "Unknown",
+                    "consequences_if_ignored": "",
+                    "event_impact_type": "Informational",
+                    "account_impact": "low",
+                }
         
         # Process each account in the batch
         events_analysis = []
