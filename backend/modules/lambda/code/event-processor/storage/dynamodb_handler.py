@@ -8,7 +8,7 @@ from decimal import Decimal
 from botocore.exceptions import ClientError
 
 from utils.config import DYNAMODB_TABLE_NAME, COUNTS_TABLE_NAME
-from utils.helpers import format_time, extract_affected_resources
+from utils.helpers import format_date_only, format_datetime, extract_affected_resources
 from aws_clients.organizations_client import get_account_name
 from aws_clients.health_client import fetch_health_event_details_for_org
 from analysis.bedrock_analyzer import analyze_event_with_bedrock, categorize_analysis
@@ -161,8 +161,8 @@ def store_events_in_dynamodb(events_analysis):
     failed_count = 0
     updated_count = 0
 
-    # Get current timestamp for metadata
-    analysis_timestamp = datetime.utcnow().isoformat()
+    # Get current timestamp for metadata in YYYY-MM-DD HH:MM:SS format
+    analysis_timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
 
     # Process each event
     for event in events_analysis:
@@ -419,8 +419,8 @@ def process_single_event(bedrock_client, event_data):
             "description": event_data.get("description", "N/A"),
             "simplified_description": simplified_description,
             "region": event_region,
-            "start_time": format_time(event_data.get("startTime", "N/A")),
-            "last_update_time": format_time(event_data.get("lastUpdatedTime", "N/A")),
+            "start_time": format_date_only(event_data.get("startTime", "N/A")),
+            "last_update_time": format_datetime(event_data.get("lastUpdatedTime", "N/A")),
             "event_type_category": event_data.get("eventTypeCategory", "N/A"),
             "service": event_data.get("service", "N/A"),
             "status_code": event_data.get(

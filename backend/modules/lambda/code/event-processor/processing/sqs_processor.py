@@ -151,8 +151,8 @@ def process_batch_message(message_body, health_client, bedrock_client, sqs_recor
         
         # Import here to avoid circular dependency
         from aws_clients.organizations_client import get_account_name
-        from aws_clients.health_client import fetch_health_event_details_for_org
-        from utils.helpers import format_time, extract_affected_resources
+        from aws_clients.health_client import fetch_health_event_details_for_org, fetch_per_account_status_batch
+        from utils.helpers import format_date_only, format_datetime, extract_affected_resources
         from analysis.bedrock_analyzer import analyze_event_with_bedrock, categorize_analysis
         
         # If analysis is missing, perform Bedrock analysis now (once for all accounts in batch)
@@ -200,7 +200,7 @@ def process_batch_message(message_body, health_client, bedrock_client, sqs_recor
                     analysis = categories.get("impact_analysis", "Analysis data stored in category fields")
                 
                 logging.info(
-                    f"Bedrock analysis complete: risk_level={categories.get('risk_level', 'UNKNOWN')}, "
+                    f"Bedrock analysis complete: risk_level={categories.get('risk_level', 'unknown')}, "
                     f"critical={categories.get('critical', False)}"
                 )
             except Exception as e:
@@ -218,6 +218,37 @@ def process_batch_message(message_body, health_client, bedrock_client, sqs_recor
                     "event_impact_type": "Informational",
                     "account_impact": "low",
                 }
+        
+        # NEW: Fetch per-account status for all accounts in this batch
+        event_arn = event_data.get("arn", "")
+        event_level_status = event_data.get("statusCode", "open")  # Get event-level status for fallback
+        account_statuses = {}
+        
+        if event_arn and account_batch:
+            try:
+                logging.info(f"Fetching per-account status for {len(account_batch)} accounts (event-level status: {event_level_status})")
+                account_statuses = fetch_per_account_status_batch(
+                    event_arn,
+                    account_batch,
+                    event_level_status=event_level_status,  # Pass event-level status as fallback
+                    batch_size=10  # All accounts in this batch (max 10 per SQS message)
+                )
+                logging.info(f"Successfully fetched per-account status: {account_statuses}")
+            except Exception as e:
+                logging.error(f"Error fetching per-account status: {str(e)}")
+                # Fallback: use event-level status for all accounts
+                account_statuses = {
+                    account_id: event_level_status
+                    for account_id in account_batch
+                }
+                logging.warning(f"Using event-level status fallback: {event_level_status}")
+        else:
+            # Fallback: use event-level status if no event ARN
+            logging.warning("No event ARN or accounts, using event-level status fallback")
+            account_statuses = {
+                account_id: event_level_status
+                for account_id in account_batch
+            }
         
         # Process each account in the batch
         events_analysis = []
@@ -253,6 +284,14 @@ def process_batch_message(message_body, health_client, bedrock_client, sqs_recor
                 if not event_region or event_region == "":
                     event_region = "global"
                 
+                # Get per-account status (with fallback to event-level status)
+                account_status = account_statuses.get(
+                    account_id,
+                    event_level_status  # Use event-level status instead of "unknown"
+                )
+                
+                logging.debug(f"Account {account_id}: status={account_status}")
+                
                 # Build event record with SHARED analysis and FETCHED description
                 event_entry = {
                     "arn": event_data.get("arn", "N/A"),
@@ -261,9 +300,9 @@ def process_batch_message(message_body, health_client, bedrock_client, sqs_recor
                     "service": event_data.get("service", "N/A"),
                     "description": description,  # FETCHED from Health API
                     "region": event_region,
-                    "start_time": format_time(event_data.get("startTime", "N/A")),
-                    "last_update_time": format_time(event_data.get("lastUpdatedTime", "N/A")),
-                    "status_code": event_data.get("statusCode", "unknown"),
+                    "start_time": format_date_only(event_data.get("startTime", "N/A")),
+                    "last_update_time": format_datetime(event_data.get("lastUpdatedTime", "N/A")),
+                    "status_code": account_status,  # PER-ACCOUNT STATUS!
                     "event_type_category": event_data.get("eventTypeCategory", "N/A"),
                     "analysis_text": analysis,  # REUSED from message
                     "critical": categories.get("critical", False),  # REUSED

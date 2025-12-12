@@ -9,6 +9,10 @@ backend/testing/logs/
 backend/testing/dynamodb-loader/modify_test_events.py
 backend/testing/dynamodb-loader/run_modify_test_events.sh
 
+# Testing scripts and documentation
+backend/testing/*.py
+backend/testing/*.md
+
 # Pyenv
 .python-version
 

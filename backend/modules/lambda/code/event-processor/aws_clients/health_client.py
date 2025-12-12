@@ -133,6 +133,128 @@ def fetch_affected_accounts_for_event(event_arn, max_accounts=None):
         return []
 
 
+def map_entity_status_to_event_status(entity_status):
+    """
+    Map AWS Health entity status codes to event status codes.
+    
+    AWS Health API returns different status codes for entities vs events:
+    - Entity status (from describe_affected_entities_for_organization):
+      IMPAIRED, UNIMPAIRED, UNKNOWN, PENDING, RESOLVED
+    - Event status (used in DynamoDB and describe_events_for_organization):
+      open, closed, upcoming
+    
+    This function maps entity status to event status for consistency.
+    
+    Args:
+        entity_status (str): Entity status code from AWS Health API
+        
+    Returns:
+        str: Mapped event status code (open, closed, upcoming, or unknown)
+    """
+    # Normalize to uppercase for comparison
+    entity_status_upper = str(entity_status).upper()
+    
+    # Map entity status to event status
+    status_mapping = {
+        'IMPAIRED': 'open',      # Resource is impaired = event is open
+        'PENDING': 'open',       # Issue is pending = event is open
+        'UNIMPAIRED': 'closed',  # Resource is unimpaired = event is closed
+        'RESOLVED': 'closed',    # Issue is resolved = event is closed
+        'UNKNOWN': 'unknown',    # Unknown status = unknown
+    }
+    
+    mapped_status = status_mapping.get(entity_status_upper, 'unknown')
+    
+    if mapped_status == 'unknown' and entity_status_upper not in status_mapping:
+        logging.warning(f"Unknown entity status '{entity_status}', mapping to 'unknown'")
+    
+    return mapped_status
+
+
+def fetch_per_account_status_batch(event_arn, account_ids, event_level_status='open', batch_size=10):
+    """
+    Fetch status for multiple accounts in a single batched API call.
+    AWS Health API supports up to 10 organizationEntityFilters per call.
+    
+    This function is used by SQS workers to get per-account status for events,
+    enabling accurate tracking of which accounts have resolved issues vs which still have open issues.
+    
+    IMPORTANT: This function fetches ENTITY status from AWS Health API and maps it to
+    EVENT status codes (open/closed/upcoming) for consistency with DynamoDB schema.
+    
+    Args:
+        event_arn (str): Event ARN
+        account_ids (list): List of account IDs to fetch status for
+        event_level_status (str): Fallback status if API fails (default: 'open')
+        batch_size (int): Number of accounts per API call (max 10, AWS API limit)
+        
+    Returns:
+        dict: {account_id: status_code}
+            status_code will be: 'open', 'closed', 'upcoming' (never 'unknown' - uses event_level_status as fallback)
+            (mapped from entity status: IMPAIRED/PENDING -> open, UNIMPAIRED/RESOLVED -> closed)
+    """
+    health_client = get_health_client()
+    account_statuses = {}
+    
+    if not account_ids:
+        logging.warning("No account IDs provided to fetch_per_account_status_batch")
+        return account_statuses
+    
+    # Split accounts into batches of batch_size (API limit is 10)
+    for i in range(0, len(account_ids), batch_size):
+        batch = account_ids[i:i + batch_size]
+        
+        # Build filters for this batch
+        filters = [
+            {'eventArn': event_arn, 'awsAccountId': account_id}
+            for account_id in batch
+        ]
+        
+        try:
+            logging.debug(f"Fetching per-account status for {len(batch)} accounts (batch {i//batch_size + 1})")
+            
+            response = health_client.describe_affected_entities_for_organization(
+                organizationEntityFilters=filters
+            )
+            
+            # Parse response - entities are grouped by account
+            entities = response.get('entities', [])
+            logging.debug(f"Received {len(entities)} entities from AWS Health API")
+            
+            for entity in entities:
+                account_id = entity.get('awsAccountId')
+                entity_status = entity.get('statusCode')
+                
+                if account_id:
+                    if entity_status:
+                        # Map entity status to event status
+                        event_status = map_entity_status_to_event_status(entity_status)
+                        account_statuses[account_id] = event_status
+                        logging.debug(f"Account {account_id}: entity_status={entity_status} -> event_status={event_status}")
+                    else:
+                        # No statusCode in entity response - use event-level status
+                        account_statuses[account_id] = event_level_status
+                        logging.debug(f"Account {account_id}: no statusCode in entity, using event-level status '{event_level_status}'")
+            
+            # Handle accounts with no entities (event closed for that account)
+            for account_id in batch:
+                if account_id not in account_statuses:
+                    # No entities means the event doesn't affect this account anymore (closed)
+                    account_statuses[account_id] = 'closed'
+                    logging.debug(f"Account {account_id}: no entities, marking as closed")
+                    
+        except Exception as e:
+            logging.error(f"Error fetching batch status for event {event_arn}: {str(e)}")
+            # Use event-level status as fallback instead of 'unknown'
+            for account_id in batch:
+                if account_id not in account_statuses:
+                    account_statuses[account_id] = event_level_status
+                    logging.warning(f"Account {account_id}: API error, using event-level status '{event_level_status}' as fallback")
+    
+    logging.info(f"Fetched per-account status for {len(account_statuses)} accounts: {account_statuses}")
+    return account_statuses
+
+
 def fetch_health_event_details_for_org(event_arn, account_id=None):
     """
     Fetch detailed event information from AWS Health API for any account in the organization

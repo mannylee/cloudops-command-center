@@ -22,7 +22,7 @@ from storage.dynamodb_handler import (
     update_live_counts,
     initialize_live_counts,
 )
-from utils.helpers import format_time, extract_affected_resources
+from utils.helpers import format_date_only, format_datetime, extract_affected_resources
 from utils.event_helpers import expand_events_by_account, create_account_batches
 from analysis.bedrock_analyzer import analyze_event_with_bedrock, categorize_analysis
 from utils.sqs_helpers import send_events_to_sqs
@@ -353,7 +353,7 @@ def analyze_and_batch_event(event, bedrock_client, skip_analysis=False):
                 logging.warning(f"Bedrock returned empty analysis_text, using impactAnalysis as fallback")
                 analysis_text = categories.get("impact_analysis", "Analysis data stored in category fields")
         
-        logging.info(f"Analysis complete for {event.get('eventTypeCode', 'unknown')}: risk_level={categories.get('risk_level', 'UNKNOWN')}, critical={categories.get('critical', False)}")
+        logging.info(f"Analysis complete for {event.get('eventTypeCode', 'unknown')}: risk_level={categories.get('risk_level', 'unknown')}, critical={categories.get('critical', False)}")
         
         # Create batches of accounts (default batch size: 10)
         account_batches = create_account_batches(affected_accounts, batch_size=10)
@@ -1057,8 +1057,8 @@ def process_synchronously(
                     "service": item.get("service", "N/A"),
                     "description": actual_description,
                     "region": item_region,
-                    "start_time": format_time(item.get("startTime", "N/A")),
-                    "last_update_time": format_time(item.get("lastUpdatedTime", "N/A")),
+                    "start_time": format_date_only(item.get("startTime", "N/A")),
+                    "last_update_time": format_datetime(item.get("lastUpdatedTime", "N/A")),
                     "status_code": item.get("statusCode", "unknown"),
                     "event_type_category": item.get("eventTypeCategory", "N/A"),
                     "analysis_text": analysis,
