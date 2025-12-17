@@ -9,24 +9,34 @@ variable "common_tags" {
   default     = {}
 }
 
+variable "create_frontend_params" {
+  description = "Whether to create frontend-related SSM parameters (API Gateway, Cognito)"
+  type        = bool
+  default     = false
+}
+
 variable "api_gateway_url" {
   description = "API Gateway endpoint URL"
   type        = string
+  default     = ""
 }
 
 variable "cognito_user_pool_id" {
   description = "Cognito User Pool ID"
   type        = string
+  default     = ""
 }
 
 variable "cognito_client_id" {
   description = "Cognito User Pool Client ID"
   type        = string
+  default     = ""
 }
 
 variable "cognito_domain_url" {
   description = "Cognito Domain URL"
   type        = string
+  default     = ""
 }
 
 variable "s3_backend_bucket" {

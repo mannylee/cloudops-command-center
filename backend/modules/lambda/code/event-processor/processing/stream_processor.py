@@ -35,7 +35,9 @@ def process_dynamodb_stream_event(event, context):
                 {
                     "message": "DynamoDB Stream processed successfully",
                     "records_processed": result.get("processed", 0),
-                    "count_updates": result.get("count_updates", 0),
+                    "ttl_count_updates": result.get("count_updates", 0),
+                    "accounts_updated_from_status_changes": result.get("arns_updated", 0),
+                    "unique_arns_processed": result.get("unique_arns_processed", 0),
                 }
             ),
         }

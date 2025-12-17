@@ -21,6 +21,7 @@ from storage.dynamodb_handler import (
     store_events_in_dynamodb,
     update_live_counts,
     initialize_live_counts,
+    recalculate_arn_based_counts,
 )
 from utils.helpers import format_date_only, format_datetime, extract_affected_resources
 from utils.event_helpers import expand_events_by_account, create_account_batches
@@ -535,7 +536,14 @@ def process_single_event_mode(event, health_client, bedrock_client):
     if events_analysis:
         logging.info(f"Storing {len(events_analysis)} analyzed events in DynamoDB")
         storage_result = store_events_in_dynamodb(events_analysis)
-        counts_result = update_live_counts(events_analysis)
+        
+        # Recalculate ARN-based counts AFTER storing
+        try:
+            counts_result = recalculate_arn_based_counts()
+            logging.info(f"ARN-based counts recalculated: {counts_result}")
+        except Exception as e:
+            logging.error(f"Error recalculating ARN-based counts: {str(e)}")
+            counts_result = {"error": str(e)}
 
         logging.info(
             f"Single event processing complete: stored={storage_result.get('stored', 0)}, updated={storage_result.get('updated', 0)}"
@@ -759,81 +767,45 @@ def fetch_organization_events(
 ):
     """
     Fetch events using organization view
+    Fetches ALL events within the time window regardless of status
     """
     all_events = []
 
-    # Fetch closed events
-    closed_filter = {
+    # Fetch all events within the time window (no status filtering)
+    event_filter = {
         "lastUpdatedTime": {"from": formatted_start, "to": formatted_end},
-        "eventStatusCodes": ["closed", "upcoming"],
     }
     if event_categories_to_process:
-        closed_filter["eventTypeCategories"] = event_categories_to_process
+        event_filter["eventTypeCategories"] = event_categories_to_process
 
-    logging.info(f"Fetching CLOSED events with filter: {closed_filter}")
-    closed_response = health_client.describe_events_for_organization(
-        filter=closed_filter, maxResults=100
+    logging.info(f"Fetching ALL events (all statuses) with filter: {event_filter}")
+    response = health_client.describe_events_for_organization(
+        filter=event_filter, maxResults=100
     )
 
-    if "events" in closed_response:
-        all_events.extend(closed_response["events"])
+    if "events" in response:
+        all_events.extend(response["events"])
         logging.info(
-            f"Retrieved {len(closed_response.get('events', []))} closed events"
+            f"Retrieved {len(response.get('events', []))} events"
         )
 
-    # Handle pagination for closed events
-    while "nextToken" in closed_response and closed_response["nextToken"]:
-        logging.debug("Found nextToken for closed events, fetching more...")
+    # Handle pagination
+    while "nextToken" in response and response["nextToken"]:
+        logging.debug("Found nextToken, fetching more events...")
         if context.get_remaining_time_in_millis() < 15000:
             logging.warning("Approaching Lambda timeout, stopping pagination")
             break
 
-        closed_response = health_client.describe_events_for_organization(
-            filter=closed_filter,
+        response = health_client.describe_events_for_organization(
+            filter=event_filter,
             maxResults=100,
-            nextToken=closed_response["nextToken"],
+            nextToken=response["nextToken"],
         )
 
-        if "events" in closed_response:
-            all_events.extend(closed_response["events"])
+        if "events" in response:
+            all_events.extend(response["events"])
             logging.debug(
-                f"Retrieved {len(closed_response.get('events', []))} additional closed events"
-            )
-
-    # Fetch open events
-    open_filter = {
-        "lastUpdatedTime": {"from": formatted_start},
-        "eventStatusCodes": ["open"],
-    }
-    if event_categories_to_process:
-        open_filter["eventTypeCategories"] = event_categories_to_process
-
-    logging.info(f"Fetching OPEN events with filter: {open_filter}")
-    open_response = health_client.describe_events_for_organization(
-        filter=open_filter, maxResults=100
-    )
-
-    if "events" in open_response:
-        all_events.extend(open_response["events"])
-        logging.info(f"Retrieved {len(open_response.get('events', []))} open events")
-
-    # Handle pagination for open events
-    while "nextToken" in open_response and open_response["nextToken"]:
-        logging.debug("Found nextToken for open events, fetching more...")
-        if context.get_remaining_time_in_millis() < 15000:
-            logging.warning("Approaching Lambda timeout, stopping pagination")
-            break
-
-        open_response = health_client.describe_events_for_organization(
-            filter=open_filter,
-            maxResults=100,
-            nextToken=open_response["nextToken"],
-        )
-
-        if "events" in open_response:
-            all_events.extend(open_response["events"])
-            logging.debug(
-                f"Retrieved {len(open_response.get('events', []))} additional open events"
+                f"Retrieved {len(response.get('events', []))} additional events"
             )
 
     return all_events
@@ -1101,38 +1073,18 @@ def process_synchronously(
             # Store events in DynamoDB
             storage_result = store_events_in_dynamodb(events_analysis)
 
-            # Update live counts with current events
-            logging.info(f"Updating live counts for {len(events_analysis)} events")
-            counts_result = update_live_counts(events_analysis)
-
-            # Check if we need to initialize live counts from existing events (first deployment)
-            if COUNTS_TABLE_NAME:
-                try:
-                    import boto3
-
-                    dynamodb = boto3.resource("dynamodb")
-                    counts_table = dynamodb.Table(COUNTS_TABLE_NAME)
-
-                    # Check if table is empty (indicates first deployment)
-                    response = counts_table.scan(Limit=1)
-                    if response.get("Count", 0) == 0:
-                        logging.warning(
-                            "Counts table is empty after processing current events"
-                        )
-                        logging.warning(
-                            "This might indicate an issue with the live counts update"
-                        )
-                        logging.info(
-                            "Attempting to initialize from existing open events in events table"
-                        )
-                        initialize_live_counts()
-                    else:
-                        logging.info(
-                            f"Counts table now has {response.get('Count', 0)} records"
-                        )
-                except Exception as e:
-                    logging.error(f"Error checking counts table after update: {str(e)}")
-                    logging.error(f"{traceback.format_exc()}")
+            # Recalculate ARN-based counts AFTER storing
+            # This ensures counts reflect the new state where:
+            # - Each unique ARN is counted only once
+            # - An ARN is "closed" only if ALL accounts under it are closed
+            logging.info("Recalculating ARN-based counts...")
+            try:
+                counts_result = recalculate_arn_based_counts()
+                logging.info(f"ARN-based counts recalculated: {counts_result}")
+            except Exception as e:
+                logging.error(f"Error recalculating ARN-based counts: {str(e)}")
+                logging.error(f"{traceback.format_exc()}")
+                counts_result = {"error": str(e)}
 
             return {
                 "statusCode": 200,

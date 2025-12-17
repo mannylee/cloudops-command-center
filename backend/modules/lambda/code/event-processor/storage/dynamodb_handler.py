@@ -739,7 +739,9 @@ def update_live_counts(events_analysis, is_sqs_processing=False):
 
 def process_dynamodb_stream_records(stream_records):
     """
-    Process DynamoDB Stream records for TTL deletions and update counts accordingly
+    Process DynamoDB Stream records for:
+    1. TTL deletions - decrement counts for deleted events
+    2. Status changes - update counts when event status changes (INSERT/MODIFY)
 
     Args:
         stream_records (list): List of DynamoDB stream records
@@ -749,55 +751,90 @@ def process_dynamodb_stream_records(stream_records):
     """
     if not COUNTS_TABLE_NAME:
         logging.warning("Counts table name not provided, skipping stream processing")
-        return {"processed": 0, "count_updates": 0}
+        return {"processed": 0, "count_updates": 0, "arns_updated": 0}
 
     logging.info(f"Processing {len(stream_records)} DynamoDB stream records")
 
     processed_count = 0
     ttl_deletions = []
+    arns_to_update = set()  # Track unique ARNs that need count updates
 
     # Process each stream record
     for record in stream_records:
         try:
             event_name = record.get("eventName")
-
-            # Only process REMOVE events (deletions)
-            if event_name != "REMOVE":
-                continue
-
-            # Check if this is a TTL deletion (vs user deletion)
-            user_identity = record.get("userIdentity", {})
-            if user_identity.get("principalId") != "dynamodb.amazonaws.com":
-                continue
-
-            # Extract the deleted event data from OldImage
             dynamodb_data = record.get("dynamodb", {})
-            old_image = dynamodb_data.get("OldImage", {})
 
-            if not old_image:
-                continue
+            # Handle REMOVE events (TTL deletions)
+            if event_name == "REMOVE":
+                # Check if this is a TTL deletion (vs user deletion)
+                user_identity = record.get("userIdentity", {})
+                if user_identity.get("principalId") != "dynamodb.amazonaws.com":
+                    continue
 
-            # Convert DynamoDB format to regular dict
-            deleted_event = {
-                "accountId": old_image.get("accountId", {}).get("S", "N/A"),
-                "service": old_image.get("service", {}).get("S", "N/A"),
-                "event_type_category": old_image.get("eventTypeCategory", {}).get(
-                    "S", "N/A"
-                ),
-                "status_code": old_image.get("statusCode", {}).get("S", "unknown"),
-                "eventArn": old_image.get("eventArn", {}).get("S", "N/A"),
-            }
+                # Extract the deleted event data from OldImage
+                old_image = dynamodb_data.get("OldImage", {})
+                if not old_image:
+                    continue
 
-            # Only process if we have valid data
-            if (
-                deleted_event["accountId"] != "N/A"
-                and deleted_event["eventArn"] != "N/A"
-            ):
-                ttl_deletions.append(deleted_event)
-                processed_count += 1
+                # Convert DynamoDB format to regular dict
+                deleted_event = {
+                    "accountId": old_image.get("accountId", {}).get("S", "N/A"),
+                    "service": old_image.get("service", {}).get("S", "N/A"),
+                    "event_type_category": old_image.get("eventTypeCategory", {}).get(
+                        "S", "N/A"
+                    ),
+                    "status_code": old_image.get("statusCode", {}).get("S", "unknown"),
+                    "eventArn": old_image.get("eventArn", {}).get("S", "N/A"),
+                }
+
+                # Only process if we have valid data
+                if (
+                    deleted_event["accountId"] != "N/A"
+                    and deleted_event["eventArn"] != "N/A"
+                ):
+                    ttl_deletions.append(deleted_event)
+                    processed_count += 1
+
+            # Handle INSERT and MODIFY events (status changes)
+            elif event_name in ["INSERT", "MODIFY"]:
+                old_image = dynamodb_data.get("OldImage", {})
+                new_image = dynamodb_data.get("NewImage", {})
+
+                if not new_image:
+                    continue
+
+                # Extract event ARN and status from new image
+                event_arn = new_image.get("eventArn", {}).get("S", "")
+                new_status = new_image.get("statusCode", {}).get("S", "")
+                
+                if not event_arn:
+                    continue
+
+                # For INSERT events, always update counts (new event)
+                if event_name == "INSERT":
+                    logging.debug(f"INSERT detected for ARN {event_arn}, status={new_status}")
+                    arns_to_update.add(event_arn)
+                    processed_count += 1
+                
+                # For MODIFY events, check if status changed
+                elif event_name == "MODIFY" and old_image:
+                    old_status = old_image.get("statusCode", {}).get("S", "")
+                    
+                    # Only update counts if status actually changed
+                    if old_status != new_status:
+                        logging.info(
+                            f"Status change detected for ARN {event_arn}: "
+                            f"{old_status} -> {new_status}"
+                        )
+                        arns_to_update.add(event_arn)
+                        processed_count += 1
+                    else:
+                        logging.debug(f"MODIFY event for ARN {event_arn} but no status change")
 
         except Exception as e:
             logging.error(f"Error processing stream record: {str(e)}")
+            logging.error(f"{traceback.format_exc()}")
             continue
 
     # Update counts for TTL deletions
@@ -828,10 +865,40 @@ def process_dynamodb_stream_records(stream_records):
             result = update_live_counts_for_ttl_deletions(events_for_count_update)
             count_updates = result.get("updated", 0)
 
+    # Update counts for status changes (INSERT/MODIFY)
+    arns_updated = 0
+    if arns_to_update:
+        logging.info(f"Updating counts for {len(arns_to_update)} ARNs with status changes")
+        
+        for event_arn in arns_to_update:
+            try:
+                # Use the efficient per-ARN update function
+                result = update_counts_for_arn(event_arn)
+                
+                if "error" not in result:
+                    arns_updated += result.get("updated", 0)
+                    logging.debug(
+                        f"Updated counts for ARN {event_arn}: "
+                        f"{result.get('updated', 0)} accounts affected"
+                    )
+                else:
+                    logging.error(f"Error updating counts for ARN {event_arn}: {result['error']}")
+                    
+            except Exception as e:
+                logging.error(f"Error updating counts for ARN {event_arn}: {str(e)}")
+                logging.error(f"{traceback.format_exc()}")
+                continue
+
     logging.info(
-        f"Stream processing complete: {processed_count} records processed, {count_updates} count updates"
+        f"Stream processing complete: {processed_count} records processed, "
+        f"{count_updates} TTL count updates, {arns_updated} accounts updated from status changes"
     )
-    return {"processed": processed_count, "count_updates": count_updates}
+    return {
+        "processed": processed_count,
+        "count_updates": count_updates,
+        "arns_updated": arns_updated,
+        "unique_arns_processed": len(arns_to_update)
+    }
 
 
 def update_live_counts_for_ttl_deletions(ttl_deletion_events):
@@ -1158,3 +1225,344 @@ def force_counts_update():
         logging.info(f"Force update result: {result}")
     else:
         logging.info("No events found for force update")
+
+
+def update_counts_for_arn(event_arn, affected_account_ids=None):
+    """
+    Update counts for a specific ARN using ARN-based logic.
+    
+    This is an efficient incremental update that only queries the specific ARN,
+    not the entire events table.
+    
+    Counts table logic:
+    - Count each unique health event ARN only ONCE per account
+    - An ARN is considered "closed" only if ALL accounts under that ARN have status "closed"
+    - If ANY account under an ARN has status != "closed", the ARN counts as open/active
+    
+    Args:
+        event_arn (str): The event ARN to update counts for
+        affected_account_ids (list): Optional list of account IDs to update (optimization)
+    
+    Returns:
+        dict: Summary of the update
+    """
+    if not DYNAMODB_TABLE_NAME or not COUNTS_TABLE_NAME or not event_arn:
+        logging.warning("Missing configuration for ARN-based count update")
+        return {"updated": 0}
+
+    dynamodb = boto3.resource("dynamodb")
+    events_table = dynamodb.Table(DYNAMODB_TABLE_NAME)
+    counts_table = dynamodb.Table(COUNTS_TABLE_NAME)
+
+    try:
+        # Query all records for this specific ARN (efficient - uses partition key)
+        response = events_table.query(
+            KeyConditionExpression="eventArn = :arn",
+            ExpressionAttributeValues={":arn": event_arn},
+            ProjectionExpression="eventArn, accountId, statusCode, eventTypeCategory, service"
+        )
+        arn_records = response.get("Items", [])
+        
+        # Handle pagination (unlikely for single ARN but be safe)
+        while "LastEvaluatedKey" in response:
+            response = events_table.query(
+                KeyConditionExpression="eventArn = :arn",
+                ExpressionAttributeValues={":arn": event_arn},
+                ProjectionExpression="eventArn, accountId, statusCode, eventTypeCategory, service",
+                ExclusiveStartKey=response["LastEvaluatedKey"]
+            )
+            arn_records.extend(response.get("Items", []))
+
+        if not arn_records:
+            logging.debug(f"No records found for ARN: {event_arn}")
+            return {"updated": 0}
+
+        # Determine if ARN is effectively closed (ALL accounts closed)
+        all_closed = all(r.get("statusCode") == "closed" for r in arn_records)
+        
+        # Get category info from first record
+        category = arn_records[0].get("eventTypeCategory", "")
+        service = (arn_records[0].get("service", "") or "").upper()
+        
+        # Determine counter category
+        counter_category = None
+        if service == "BILLING":
+            counter_category = "billing_changes"
+        elif category == "accountNotification":
+            counter_category = "notifications"
+        elif category == "issue" and service != "BILLING":
+            counter_category = "active_issues"
+        elif category == "scheduledChange":
+            counter_category = "scheduled"
+        
+        if not counter_category:
+            logging.debug(f"ARN {event_arn} doesn't map to a counter category")
+            return {"updated": 0}
+
+        # Get affected accounts from records
+        accounts_in_arn = set(r.get("accountId") for r in arn_records if r.get("accountId"))
+        
+        # For each affected account, we need to recalculate their count for this category
+        # This requires checking ALL ARNs for that account in that category
+        updated_count = 0
+        
+        for account_id in accounts_in_arn:
+            try:
+                # Query all ARNs for this account to count unique open ARNs
+                # Use a GSI if available, otherwise scan with filter
+                # For now, we'll do a targeted scan for this account's events
+                account_events = []
+                scan_response = events_table.scan(
+                    FilterExpression="accountId = :aid",
+                    ExpressionAttributeValues={":aid": account_id},
+                    ProjectionExpression="eventArn, statusCode, eventTypeCategory, service"
+                )
+                account_events.extend(scan_response.get("Items", []))
+                
+                while "LastEvaluatedKey" in scan_response:
+                    scan_response = events_table.scan(
+                        FilterExpression="accountId = :aid",
+                        ExpressionAttributeValues={":aid": account_id},
+                        ProjectionExpression="eventArn, statusCode, eventTypeCategory, service",
+                        ExclusiveStartKey=scan_response["LastEvaluatedKey"]
+                    )
+                    account_events.extend(scan_response.get("Items", []))
+                
+                # Group by ARN and check if each ARN is fully closed
+                from collections import defaultdict
+                arn_statuses = defaultdict(list)
+                arn_categories = {}
+                
+                for evt in account_events:
+                    arn = evt.get("eventArn", "")
+                    if arn:
+                        arn_statuses[arn].append(evt.get("statusCode", "unknown"))
+                        evt_category = evt.get("eventTypeCategory", "")
+                        evt_service = (evt.get("service", "") or "").upper()
+                        
+                        # Determine category for this ARN
+                        if evt_service == "BILLING":
+                            arn_categories[arn] = "billing_changes"
+                        elif evt_category == "accountNotification":
+                            arn_categories[arn] = "notifications"
+                        elif evt_category == "issue" and evt_service != "BILLING":
+                            arn_categories[arn] = "active_issues"
+                        elif evt_category == "scheduledChange":
+                            arn_categories[arn] = "scheduled"
+                
+                # Now we need to check if each ARN is fully closed across ALL accounts
+                # This is the tricky part - we need to query each ARN
+                category_counts = {
+                    "notifications": 0,
+                    "active_issues": 0,
+                    "scheduled": 0,
+                    "billing_changes": 0,
+                }
+                
+                for arn, cat in arn_categories.items():
+                    if not cat:
+                        continue
+                    
+                    # Check if this ARN is fully closed (all accounts)
+                    arn_response = events_table.query(
+                        KeyConditionExpression="eventArn = :arn",
+                        ExpressionAttributeValues={":arn": arn},
+                        ProjectionExpression="statusCode"
+                    )
+                    all_statuses = [r.get("statusCode") for r in arn_response.get("Items", [])]
+                    
+                    # ARN is open if ANY account is not closed
+                    if not all(s == "closed" for s in all_statuses):
+                        category_counts[cat] += 1
+                
+                # Update counts table for this account
+                counts_table.update_item(
+                    Key={"accountId": account_id},
+                    UpdateExpression="SET notifications = :n, active_issues = :a, scheduled = :s, billing_changes = :b, lastUpdated = :now",
+                    ExpressionAttributeValues={
+                        ":n": category_counts["notifications"],
+                        ":a": category_counts["active_issues"],
+                        ":s": category_counts["scheduled"],
+                        ":b": category_counts["billing_changes"],
+                        ":now": datetime.utcnow().isoformat(),
+                    },
+                )
+                updated_count += 1
+                logging.debug(f"Updated counts for account {account_id}: {category_counts}")
+                
+            except Exception as e:
+                logging.error(f"Error updating counts for account {account_id}: {str(e)}")
+        
+        return {"updated": updated_count, "arn": event_arn, "all_closed": all_closed}
+        
+    except Exception as e:
+        logging.error(f"Error in update_counts_for_arn: {str(e)}")
+        return {"error": str(e)}
+
+
+def recalculate_arn_based_counts():
+    """
+    Full recalculation of counts based on unique ARNs across all accounts.
+    
+    USE SPARINGLY - this does a full table scan. Prefer update_counts_for_arn()
+    for incremental updates during normal event processing.
+    
+    Counts table logic:
+    - Count each unique health event ARN only ONCE
+    - An ARN is considered "closed" only if ALL accounts under that ARN have status "closed"
+    - If ANY account under an ARN has status != "closed", the ARN counts as open/active
+    
+    Returns:
+        dict: Summary of the recalculation with counts by category
+    """
+    if not DYNAMODB_TABLE_NAME or not COUNTS_TABLE_NAME:
+        logging.error("Table names not provided, cannot recalculate ARN-based counts")
+        return {"error": "Missing table configuration"}
+
+    logging.info("=== RECALCULATING ARN-BASED COUNTS (FULL SCAN) ===")
+
+    dynamodb = boto3.resource("dynamodb")
+    events_table = dynamodb.Table(DYNAMODB_TABLE_NAME)
+    counts_table = dynamodb.Table(COUNTS_TABLE_NAME)
+
+    # Step 1: Scan all events and group by ARN
+    all_events = []
+    try:
+        logging.info("Scanning events table...")
+        response = events_table.scan(
+            ProjectionExpression="eventArn, accountId, statusCode, eventTypeCategory, service"
+        )
+        all_events.extend(response.get("Items", []))
+
+        while "LastEvaluatedKey" in response:
+            response = events_table.scan(
+                ProjectionExpression="eventArn, accountId, statusCode, eventTypeCategory, service",
+                ExclusiveStartKey=response["LastEvaluatedKey"],
+            )
+            all_events.extend(response.get("Items", []))
+
+        logging.info(f"Found {len(all_events)} total event+account records")
+
+    except Exception as e:
+        logging.error(f"Error scanning events table: {str(e)}")
+        return {"error": str(e)}
+
+    # Step 2: Group events by ARN and determine effective status
+    from collections import defaultdict
+    
+    arn_data = defaultdict(lambda: {"accounts": [], "category": None, "service": None})
+    
+    for event in all_events:
+        arn = event.get("eventArn", "")
+        if not arn:
+            continue
+            
+        account_id = event.get("accountId", "")
+        status = event.get("statusCode", "unknown")
+        category = event.get("eventTypeCategory", "")
+        service = (event.get("service", "") or "").upper()
+        
+        arn_data[arn]["accounts"].append({"accountId": account_id, "status": status})
+        arn_data[arn]["category"] = category
+        arn_data[arn]["service"] = service
+
+    logging.info(f"Found {len(arn_data)} unique ARNs")
+
+    # Step 3: Count open ARNs per account per category
+    account_arn_counts = defaultdict(lambda: {
+        "notifications": set(),
+        "active_issues": set(),
+        "scheduled": set(),
+        "billing_changes": set(),
+    })
+    
+    for arn, data in arn_data.items():
+        accounts = data["accounts"]
+        category = data["category"]
+        service = data["service"]
+        
+        # ARN is closed only if ALL accounts are closed
+        all_closed = all(a["status"] == "closed" for a in accounts)
+        
+        if all_closed:
+            continue
+        
+        # Determine counter category
+        counter_category = None
+        if service == "BILLING":
+            counter_category = "billing_changes"
+        elif category == "accountNotification":
+            counter_category = "notifications"
+        elif category == "issue" and service != "BILLING":
+            counter_category = "active_issues"
+        elif category == "scheduledChange":
+            counter_category = "scheduled"
+        
+        if not counter_category:
+            continue
+        
+        # Add this ARN to each account that has it
+        for account_info in accounts:
+            account_id = account_info["accountId"]
+            if account_id:
+                account_arn_counts[account_id][counter_category].add(arn)
+
+    # Step 4: Get existing accounts and update
+    existing_accounts = set()
+    try:
+        response = counts_table.scan(ProjectionExpression="accountId")
+        for item in response.get("Items", []):
+            existing_accounts.add(item.get("accountId", ""))
+        while "LastEvaluatedKey" in response:
+            response = counts_table.scan(
+                ProjectionExpression="accountId",
+                ExclusiveStartKey=response["LastEvaluatedKey"]
+            )
+            for item in response.get("Items", []):
+                existing_accounts.add(item.get("accountId", ""))
+    except Exception as e:
+        logging.error(f"Error scanning counts table: {str(e)}")
+
+    all_accounts = existing_accounts.union(set(account_arn_counts.keys()))
+    updated_count = 0
+    
+    for account_id in all_accounts:
+        if not account_id:
+            continue
+            
+        try:
+            counts = account_arn_counts.get(account_id, {
+                "notifications": set(),
+                "active_issues": set(),
+                "scheduled": set(),
+                "billing_changes": set(),
+            })
+            
+            counts_table.update_item(
+                Key={"accountId": account_id},
+                UpdateExpression="SET notifications = :n, active_issues = :a, scheduled = :s, billing_changes = :b, lastUpdated = :now",
+                ExpressionAttributeValues={
+                    ":n": len(counts["notifications"]),
+                    ":a": len(counts["active_issues"]),
+                    ":s": len(counts["scheduled"]),
+                    ":b": len(counts["billing_changes"]),
+                    ":now": datetime.utcnow().isoformat(),
+                },
+            )
+            updated_count += 1
+            
+        except Exception as e:
+            logging.error(f"Error updating counts for account {account_id}: {str(e)}")
+
+    total_open_arns = len([arn for arn, data in arn_data.items() 
+                          if not all(a["status"] == "closed" for a in data["accounts"])])
+    
+    summary = {
+        "total_unique_arns": len(arn_data),
+        "open_arns": total_open_arns,
+        "closed_arns": len(arn_data) - total_open_arns,
+        "accounts_updated": updated_count,
+    }
+    
+    logging.info(f"ARN-based counts recalculation complete: {summary}")
+    return summary

@@ -169,6 +169,11 @@ def process_account_email(message_body):
             print(f"Filtered out {events_before_filter - events_after_filter} global region events")
             print(f"Remaining events for account email: {events_after_filter}")
         
+        # Skip email if no events remain after filtering
+        if not events:
+            print(f"No events remaining after filtering for {owner_email}, skipping email")
+            return
+        
         # Generate Excel report
         excel_bytes = create_account_excel_report(events, account_ids, account_names, email_mappings_info)
         

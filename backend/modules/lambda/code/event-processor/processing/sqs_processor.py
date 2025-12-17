@@ -11,8 +11,6 @@ from utils.event_helpers import normalize_event_format
 from storage.dynamodb_handler import (
     process_single_event,
     store_events_in_dynamodb,
-    update_live_counts,
-    ensure_all_counters_initialized,
 )
 
 
@@ -332,17 +330,14 @@ def process_batch_message(message_body, health_client, bedrock_client, sqs_recor
         if events_analysis:
             logging.info(f"Storing {len(events_analysis)} event records in DynamoDB (batch write)")
             
-            # Update live counts BEFORE storing
-            counts_result = update_live_counts(events_analysis, is_sqs_processing=True)
-            
             # Batch write to DynamoDB
             storage_result = store_events_in_dynamodb(events_analysis)
             
-            # Ensure all counter categories are initialized
-            try:
-                ensure_all_counters_initialized()
-            except Exception as e:
-                logging.error(f"Error ensuring counters initialized: {str(e)}")
+            # NOTE: Counts are NOT updated here to avoid performance issues.
+            # ARN-based counts require checking ALL accounts for each ARN to determine
+            # if the ARN is fully closed. This is done during scheduled_sync instead.
+            # The counts will be slightly stale (up to sync interval) but accurate.
+            logging.debug("Skipping counts update in SQS - will be handled by scheduled sync")
             
             logging.info(
                 f"Batch {batch_num}/{total_batches} complete: "
@@ -417,21 +412,17 @@ def process_legacy_single_event(message_body, bedrock_client, sqs_record):
         events_analysis = process_single_event(bedrock_client, health_event)
 
         if events_analysis:
-            # Update live counts BEFORE storing (so we can check previous status)
-            counts_result = update_live_counts(events_analysis, is_sqs_processing=True)
-
-            # Store in DynamoDB AFTER counting
+            # Store in DynamoDB
             storage_result = store_events_in_dynamodb(events_analysis)
 
-            logging.info(
-                f"Successfully processed individual event (legacy format): stored={storage_result.get('stored', 0)}, updated={storage_result.get('updated', 0)}, counts_updated={counts_result.get('updated', 0)}"
-            )
+            # NOTE: Counts are NOT updated here to avoid performance issues.
+            # ARN-based counts require checking ALL accounts for each ARN.
+            # This is done during scheduled_sync instead.
+            logging.debug("Skipping counts update in SQS - will be handled by scheduled sync")
 
-            # Ensure all counter categories are initialized for all accounts
-            try:
-                ensure_all_counters_initialized()
-            except Exception as e:
-                logging.error(f"Error ensuring counters initialized: {str(e)}")
+            logging.info(
+                f"Successfully processed individual event (legacy format): stored={storage_result.get('stored', 0)}, updated={storage_result.get('updated', 0)}"
+            )
 
             return {"batchItemFailures": []}  # No failures
         else:

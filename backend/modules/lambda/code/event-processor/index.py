@@ -62,8 +62,17 @@ def handler(event, context):
             logger.debug("Initializing AWS clients")
             health_client, bedrock_client, sqs_client = get_clients()
 
+            # Check if we're in recalculate_counts mode (ARN-based counting)
+            if isinstance(event, dict) and event.get("mode") == "recalculate_counts":
+                logger.info("Recalculate ARN-based counts mode triggered")
+                from storage.dynamodb_handler import recalculate_arn_based_counts
+                result = recalculate_arn_based_counts()
+                return {
+                    "statusCode": 200,
+                    "body": json.dumps(result, default=str)
+                }
             # Check if we're in scheduled sync mode
-            if isinstance(event, dict) and event.get("mode") == "scheduled_sync":
+            elif isinstance(event, dict) and event.get("mode") == "scheduled_sync":
                 logger.info("Scheduled sync mode triggered")
                 lookback_days = event.get("lookback_days", 30)
                 logger.info(f"Syncing events from last {lookback_days} days")

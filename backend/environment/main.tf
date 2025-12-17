@@ -845,6 +845,7 @@ module "ssm" {
 
   name_prefix            = local.name_prefix
   common_tags            = local.common_tags
+  create_frontend_params = var.build_and_upload
   api_gateway_url        = var.build_and_upload ? module.api_gateway[0].api_gateway_url : ""
   cognito_user_pool_id   = var.build_and_upload ? module.cognito[0].user_pool_id : ""
   cognito_client_id      = var.build_and_upload ? module.cognito[0].user_pool_client_id : ""

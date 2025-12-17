@@ -1299,6 +1299,7 @@ def consolidate_accounts_by_email(account_events, email_mappings):
     Group accounts by destination email address
     Aggregate events from multiple accounts mapped to same email
     Include emailMappingsInfo for each account
+    Filter out global region events (not relevant for account-specific emails)
     Returns: dict mapping email -> {accountIds, accountNames, eventKeys, mappingsInfo}
     Note: eventKeys contains only {eventArn, accountId} to keep SQS message size small
     """
@@ -1312,6 +1313,8 @@ def consolidate_accounts_by_email(account_events, email_mappings):
             'mappingsInfo': []
         })
         
+        global_events_filtered = 0
+        
         for account_id, events in account_events.items():
             # Get email mapping for this account
             if account_id in email_mappings:
@@ -1319,12 +1322,21 @@ def consolidate_accounts_by_email(account_events, email_mappings):
                 account_name = email_mappings[account_id]['accountName']
                 mapping_source = email_mappings[account_id]['mappingSource']
                 
+                # Filter out global region events (not relevant for account-specific emails)
+                non_global_events = [e for e in events if e.get('region', '').lower() != 'global']
+                global_events_filtered += len(events) - len(non_global_events)
+                
+                # Skip this account if no non-global events remain
+                if not non_global_events:
+                    print(f"Account {account_id} has only global events, skipping from per-account emails")
+                    continue
+                
                 # Add to consolidated data
                 consolidated[email]['accountIds'].append(account_id)
                 consolidated[email]['accountNames'].append(account_name)
                 
                 # Extract only event keys (eventArn, accountId) to minimize SQS message size
-                for event in events:
+                for event in non_global_events:
                     event_key = {
                         'eventArn': event.get('eventArn'),
                         'accountId': event.get('accountId')
@@ -1339,6 +1351,9 @@ def consolidate_accounts_by_email(account_events, email_mappings):
                 })
             else:
                 print(f"Warning: Account {account_id} not found in email mappings, skipping")
+        
+        if global_events_filtered > 0:
+            print(f"Filtered out {global_events_filtered} global region events from per-account emails")
         
         # Convert to regular dict
         result = dict(consolidated)
