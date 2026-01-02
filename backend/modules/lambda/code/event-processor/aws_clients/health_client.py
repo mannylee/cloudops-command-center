@@ -173,7 +173,7 @@ def map_entity_status_to_event_status(entity_status):
 
 def fetch_per_account_status_batch(event_arn, account_ids, event_level_status='open', batch_size=10):
     """
-    Fetch status for multiple accounts in a single batched API call.
+    Fetch status for multiple accounts with PAGINATION support.
     AWS Health API supports up to 10 organizationEntityFilters per call.
     
     This function is used by SQS workers to get per-account status for events,
@@ -181,6 +181,9 @@ def fetch_per_account_status_batch(event_arn, account_ids, event_level_status='o
     
     IMPORTANT: This function fetches ENTITY status from AWS Health API and maps it to
     EVENT status codes (open/closed/upcoming) for consistency with DynamoDB schema.
+    
+    PAGINATION: Handles multiple pages of entities to ensure ALL affected resources are checked.
+    Critical for events with 100+ entities where some may be IMPAIRED while others are RESOLVED.
     
     Args:
         event_arn (str): Event ARN
@@ -211,37 +214,100 @@ def fetch_per_account_status_batch(event_arn, account_ids, event_level_status='o
         ]
         
         try:
-            logging.debug(f"Fetching per-account status for {len(batch)} accounts (batch {i//batch_size + 1})")
+            # PAGINATION LOOP - fetch ALL pages of entities
+            next_token = None
+            page_count = 0
+            total_entities = 0
+            max_pages = 10  # Safety limit to prevent infinite loops
             
-            response = health_client.describe_affected_entities_for_organization(
-                organizationEntityFilters=filters
-            )
-            
-            # Parse response - entities are grouped by account
-            entities = response.get('entities', [])
-            logging.debug(f"Received {len(entities)} entities from AWS Health API")
-            
-            for entity in entities:
-                account_id = entity.get('awsAccountId')
-                entity_status = entity.get('statusCode')
+            while True:
+                page_count += 1
                 
-                if account_id:
-                    if entity_status:
-                        # Map entity status to event status
-                        event_status = map_entity_status_to_event_status(entity_status)
-                        account_statuses[account_id] = event_status
-                        logging.debug(f"Account {account_id}: entity_status={entity_status} -> event_status={event_status}")
-                    else:
-                        # No statusCode in entity response - use event-level status
-                        account_statuses[account_id] = event_level_status
-                        logging.debug(f"Account {account_id}: no statusCode in entity, using event-level status '{event_level_status}'")
+                # Safety check: prevent excessive pagination
+                if page_count > max_pages:
+                    logging.warning(
+                        f"Reached max pagination limit ({max_pages} pages, {total_entities} entities). "
+                        f"Some entities may not be processed. Consider increasing max_pages if needed."
+                    )
+                    break
+                
+                logging.debug(f"Fetching entities page {page_count} for {len(batch)} accounts")
+                
+                # Build API call parameters
+                api_params = {
+                    'organizationEntityFilters': filters,
+                    'maxResults': 100  # Explicit max per page
+                }
+                
+                if next_token:
+                    api_params['nextToken'] = next_token
+                
+                response = health_client.describe_affected_entities_for_organization(**api_params)
+                
+                # Parse response - entities are grouped by account
+                entities = response.get('entities', [])
+                total_entities += len(entities)
+                logging.debug(f"Page {page_count}: Received {len(entities)} entities (total so far: {total_entities})")
+                
+                # Process entities from this page
+                for entity in entities:
+                    account_id = entity.get('awsAccountId')
+                    entity_status = entity.get('statusCode')
+                    
+                    if account_id:
+                        if entity_status:
+                            # Map entity status to event status
+                            event_status = map_entity_status_to_event_status(entity_status)
+                            
+                            # CRITICAL: "Worst case wins" logic
+                            # If account already has status, only update if new status is "worse"
+                            # Priority: open > closed (open means action needed)
+                            current_status = account_statuses.get(account_id)
+                            
+                            if current_status is None:
+                                # First entity for this account
+                                account_statuses[account_id] = event_status
+                                logging.debug(f"Account {account_id}: entity_status={entity_status} -> event_status={event_status}")
+                            elif current_status == 'closed' and event_status == 'open':
+                                # Found an open entity, upgrade to open
+                                account_statuses[account_id] = 'open'
+                                logging.info(f"Account {account_id}: upgraded to 'open' (found IMPAIRED/PENDING entity on page {page_count})")
+                            # If current is 'open', keep it (already worst case)
+                        else:
+                            # No statusCode in entity response
+                            if account_id not in account_statuses:
+                                # Only set if we haven't seen this account yet
+                                account_statuses[account_id] = event_level_status
+                                logging.debug(f"Account {account_id}: no statusCode in entity, using event-level status '{event_level_status}'")
+                
+                # OPTIMIZATION: Early exit if all accounts have "open" status
+                # No need to check more pages since "open" is worst case
+                if len(account_statuses) == len(batch) and all(status == 'open' for status in account_statuses.values()):
+                    logging.info(
+                        f"All {len(batch)} accounts have 'open' status after page {page_count}. "
+                        f"Skipping remaining pages (optimization)."
+                    )
+                    break
+                
+                # Check for more pages
+                next_token = response.get('nextToken')
+                if not next_token:
+                    logging.debug(f"No more pages, processed {page_count} page(s) with {total_entities} total entities")
+                    break
             
-            # Handle accounts with no entities (event closed for that account)
+            # After ALL pages, handle accounts with no entities
             for account_id in batch:
                 if account_id not in account_statuses:
-                    # No entities means the event doesn't affect this account anymore (closed)
-                    account_statuses[account_id] = 'closed'
-                    logging.debug(f"Account {account_id}: no entities, marking as closed")
+                    # No entities across ALL pages - use event-level status as fallback
+                    # This is safer than assuming "closed" because:
+                    # 1. API might have issues returning entities
+                    # 2. Some event types don't expose entities via this API
+                    # 3. Events past deadline may not return entities even if resources still affected
+                    account_statuses[account_id] = event_level_status
+                    logging.debug(
+                        f"Account {account_id}: no entities across {page_count} page(s), "
+                        f"using event-level status '{event_level_status}' as fallback"
+                    )
                     
         except Exception as e:
             logging.error(f"Error fetching batch status for event {event_arn}: {str(e)}")

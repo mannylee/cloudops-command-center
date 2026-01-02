@@ -222,7 +222,19 @@ def process_batch_message(message_body, health_client, bedrock_client, sqs_recor
         event_level_status = event_data.get("statusCode", "open")  # Get event-level status for fallback
         account_statuses = {}
         
-        if event_arn and account_batch:
+        # CRITICAL LOGIC: If event-level status is "closed", ALL accounts must be "closed"
+        # This overrides per-account status to ensure consistency
+        if event_level_status == "closed":
+            logging.info(
+                f"Event-level status is 'closed' - marking all {len(account_batch)} accounts as 'closed' "
+                f"(skipping per-account status fetch)"
+            )
+            account_statuses = {
+                account_id: "closed"
+                for account_id in account_batch
+            }
+        elif event_arn and account_batch:
+            # Event is "open" or other status - fetch per-account status for granular tracking
             try:
                 logging.info(f"Fetching per-account status for {len(account_batch)} accounts (event-level status: {event_level_status})")
                 account_statuses = fetch_per_account_status_batch(
