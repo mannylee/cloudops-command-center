@@ -260,6 +260,31 @@ def process_batch_message(message_body, health_client, bedrock_client, sqs_recor
                 for account_id in account_batch
             }
         
+        # CRITICAL FIX: Normalize status codes before storing to DynamoDB
+        # DynamoDB schema expects: 'open' or 'closed'
+        # AWS Health API returns: 'open', 'closed', 'upcoming', 'ongoing'
+        # Normalization rules:
+        # - 'upcoming' → 'open' (needs attention, scheduled for future)
+        # - 'ongoing' → 'open' (needs attention, currently happening)
+        # - 'closed' → 'closed' (no action needed)
+        # - 'open' → 'open' (needs attention)
+        # - anything else → 'open' (default to needs attention for safety)
+        normalized_statuses = {}
+        for account_id, status in account_statuses.items():
+            if status == 'closed':
+                normalized_statuses[account_id] = 'closed'
+            elif status in ['open', 'upcoming', 'ongoing']:
+                normalized_statuses[account_id] = 'open'
+                if status in ['upcoming', 'ongoing']:
+                    logging.debug(f"Normalized status '{status}' → 'open' for account {account_id}")
+            else:
+                # Unknown status - default to 'open' for safety (better to show false positive than miss an issue)
+                normalized_statuses[account_id] = 'open'
+                logging.warning(f"Unknown status '{status}' for account {account_id}, defaulting to 'open'")
+        
+        # Use normalized statuses for processing
+        account_statuses = normalized_statuses
+        
         # Process each account in the batch
         events_analysis = []
         successful_accounts = 0

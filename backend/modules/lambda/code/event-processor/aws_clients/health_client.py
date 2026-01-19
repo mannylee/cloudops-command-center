@@ -199,6 +199,17 @@ def fetch_per_account_status_batch(event_arn, account_ids, event_level_status='o
     health_client = get_health_client()
     account_statuses = {}
     
+    # CRITICAL FIX: If event is closed at event level, ALL accounts must be closed
+    # This is a safety net to ensure closed events stay closed regardless of entity status
+    # Event deadline has passed - no longer actionable even if some resources weren't addressed
+    if event_level_status == 'closed':
+        logging.info(
+            f"Event {event_arn} is closed at event level. "
+            f"Marking all {len(account_ids)} accounts as closed (skipping entity checks). "
+            f"Reason: Event deadline passed - no longer actionable."
+        )
+        return {account_id: 'closed' for account_id in account_ids}
+    
     if not account_ids:
         logging.warning("No account IDs provided to fetch_per_account_status_batch")
         return account_statuses
