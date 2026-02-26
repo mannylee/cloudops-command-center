@@ -14,12 +14,51 @@ from aws_clients.health_client import fetch_health_event_details_for_org
 from analysis.bedrock_analyzer import analyze_event_with_bedrock, categorize_analysis
 
 
-def normalize_and_calculate_ttl(last_update_time_input):
+def _parse_timestamp(timestamp_input):
+    """
+    Parse a timestamp string into a naive UTC datetime.
+
+    Handles ISO format (with/without Z suffix) and RFC 2822 format.
+
+    Args:
+        timestamp_input (str): Timestamp string to parse
+
+    Returns:
+        datetime: Naive UTC datetime, or None if input is invalid/empty
+    """
+    if not timestamp_input or timestamp_input == "N/A":
+        return None
+
+    try:
+        if timestamp_input.endswith("Z"):
+            dt = datetime.fromisoformat(timestamp_input.replace("Z", "+00:00"))
+        elif "GMT" in timestamp_input or "," in timestamp_input:
+            from email.utils import parsedate_to_datetime
+            dt = parsedate_to_datetime(timestamp_input)
+        else:
+            dt = datetime.fromisoformat(timestamp_input)
+
+        # Convert to naive UTC
+        if dt.tzinfo is not None:
+            dt = datetime(*dt.utctimetuple()[:6])
+
+        return dt
+    except Exception:
+        return None
+
+
+def normalize_and_calculate_ttl(last_update_time_input, start_time_input=None):
     """
     Normalize lastUpdateTime and calculate TTL timestamp, keeping both fields in sync
 
+    TTL is calculated from whichever is later: lastUpdateTime or startTime.
+    This ensures events with future start dates (e.g. scheduled maintenance)
+    are not prematurely expired by DynamoDB TTL before their start date arrives.
+
     Args:
         last_update_time_input (str): ISO format timestamp string from AWS Health API
+        start_time_input (str, optional): Event start time. If the start time is in
+            the future relative to lastUpdateTime, TTL will be based on startTime instead.
 
     Returns:
         tuple: (normalized_last_update_time_iso, ttl_unix_timestamp)
@@ -27,44 +66,34 @@ def normalize_and_calculate_ttl(last_update_time_input):
             - ttl_unix_timestamp: Unix timestamp for DynamoDB TTL (configurable days later)
     """
     try:
-        if last_update_time_input == "N/A" or not last_update_time_input:
-            # If no valid last update time, use current time
+        last_update_dt = _parse_timestamp(last_update_time_input)
+        if last_update_dt is None:
             last_update_dt = datetime.utcnow()
-        else:
-            # Parse timestamp - handle multiple formats from AWS Health API
-            if last_update_time_input.endswith("Z"):
-                # ISO format with Z suffix
-                last_update_dt = datetime.fromisoformat(
-                    last_update_time_input.replace("Z", "+00:00")
-                )
-            elif "GMT" in last_update_time_input or "," in last_update_time_input:
-                # RFC 2822 format: "Thu, 11 Sep 2025 18:31:01 GMT"
-                from email.utils import parsedate_to_datetime
-
-                last_update_dt = parsedate_to_datetime(last_update_time_input)
-            else:
-                # ISO format without Z suffix
-                last_update_dt = datetime.fromisoformat(last_update_time_input)
-
-        # Convert to UTC and remove timezone info for consistent storage
-        if last_update_dt.tzinfo is not None:
-            # Convert to UTC and make naive
-            last_update_dt = last_update_dt.utctimetuple()
-            last_update_dt = datetime(*last_update_dt[:6])
 
         # Normalize to ISO format for consistent storage
         normalized_iso = last_update_dt.isoformat()
 
-        # Calculate TTL: configurable days from last update time
+        # Determine TTL base: use the later of lastUpdateTime and startTime
+        # This protects future-dated events from premature TTL expiry
+        ttl_base_dt = last_update_dt
+        start_dt = _parse_timestamp(start_time_input)
+        if start_dt is not None and start_dt > last_update_dt:
+            ttl_base_dt = start_dt
+            logging.debug(
+                f"TTL based on startTime ({start_dt.isoformat()}) instead of "
+                f"lastUpdateTime ({last_update_dt.isoformat()}) - event has future start date"
+            )
+
+        # Calculate TTL: configurable days from the TTL base date
         ttl_days = int(os.environ.get("EVENTS_TABLE_TTL_DAYS", "180"))
-        ttl_date = last_update_dt + timedelta(days=ttl_days)
+        ttl_date = ttl_base_dt + timedelta(days=ttl_days)
         ttl_unix = int(ttl_date.timestamp())
 
         return normalized_iso, ttl_unix
 
     except Exception as e:
         logging.error(f"Error normalizing timestamp and calculating TTL: {str(e)}")
-        logging.debug(f"Input was: {last_update_time_input}")
+        logging.debug(f"Input was: last_update={last_update_time_input}, start_time={start_time_input}")
 
         # Fallback: use current time
         fallback_dt = datetime.utcnow()
@@ -188,8 +217,10 @@ def store_events_in_dynamodb(events_analysis):
             )
 
             # Normalize lastUpdateTime and calculate TTL (keeping both fields in sync)
+            # Pass start_time so future-dated events aren't prematurely expired
             normalized_last_update_time, ttl_timestamp = normalize_and_calculate_ttl(
-                event.get("last_update_time", "N/A")
+                event.get("last_update_time", "N/A"),
+                start_time_input=event.get("start_time", None)
             )
 
             # Create item with all relevant fields
