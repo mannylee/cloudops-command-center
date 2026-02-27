@@ -247,7 +247,7 @@ def store_events_in_dynamodb(events_analysis):
                 "consequencesIfIgnored": event.get("consequences_if_ignored", ""),
                 "affectedResources": event.get("affected_resources", "None specified"),
                 "analysisTimestamp": analysis_timestamp,
-                "analysisVersion": "1.0",
+                "analysisVersion": "2025-02-27",
                 "ttl": ttl_timestamp,
             }
 
